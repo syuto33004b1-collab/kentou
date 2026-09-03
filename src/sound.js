@@ -1,4 +1,7 @@
-// 打撃音・被弾音・KO音はすべて Web Audio API の合成。音源ファイルは持たない。
+// 効果音は「音源サンプル + 合成のサブ層」の二階建て。
+// サンプルが格ゲーらしいアタックの質感を出し、サブ層（30〜60Hzの正弦波）を
+// 合成で足すことでランクごとの重さを連続的に変えられる。
+// 音源の取得に失敗したときは、下の4層合成だけで成立させる。
 //
 // 薄い音にならないよう、1発を4層で作る:
 //   1. トランジェント … 高域ノイズの極短バースト（当たった瞬間のクラック）
@@ -7,6 +10,8 @@
 //   4. テール ………… ローパスを通したノイズの長い減衰（空間と破片）
 // マスターにコンプを挟んで層を糊付けする。これが無いと重ねた分だけ潰れる。
 
+import * as samples from './samples.js';
+
 let ctx = null;
 let master = null;
 let noiseBuf = null;
@@ -14,6 +19,10 @@ let enabled = true;
 const saturators = new Map();
 
 const MASTER_GAIN = 0.55;
+// 音源は -1dBFS 正規化済み。合成音に埋もれない範囲で、クリップしない値（実測で詰めた）
+const VOICE_GAIN = 1.2;
+// 1打のクリックは打撃より20dB前後低く保つ。5打/秒鳴るので疲れさせない
+const KEY_SAMPLE_GAIN = 0.15;
 
 /** AudioContext はユーザー操作で初めて生成・resume する（autoplay policy対策） */
 export function unlock() {
@@ -35,6 +44,9 @@ export function unlock() {
     master = ctx.createGain();
     master.gain.value = enabled ? MASTER_GAIN : 0;
     master.connect(comp);
+
+    samples.init(ctx);
+    samples.preload();
 
     const len = Math.floor(ctx.sampleRate * 1.5);
     noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
@@ -126,10 +138,13 @@ function noise(t0, peak, dur, {
   src.stop(t0 + dur + 0.05);
 }
 
-/** 1打ごとの手応え。ビープにならないよう、ノイズのクリックを主にする */
+/** 1打ごとの手応え。コンボが伸びるとピッチが上がる */
 export function key(combo = 0) {
   if (!ready()) return;
   const t = ctx.currentTime;
+  // 連打で機械的に聞こえないよう ±4% 散らし、コンボでピッチを上げる
+  const rate = 1 + Math.min(combo, 24) * 0.012;
+  if (samples.play('key', KEY_SAMPLE_GAIN, master, { detune: 0.04, rate })) return;
   const f = 1900 + Math.min(combo, 24) * 90;
   noise(t, 0.3, 0.022, { freq: f, q: 2.4 });
   tone('triangle', 620 + Math.min(combo, 24) * 24, 300, t, 0.12, 0.06);
@@ -138,16 +153,16 @@ export function key(combo = 0) {
 // 弱・中・強・必殺。層の厚みと減衰の長さで重さを分ける
 const RANKS = {
   light: {
-    sub: 58, subDur: 0.26, body: 200, bodyDur: 0.15, drive: 0.35, tail: 0.16, gain: 0.28,
+    sub: 58, subDur: 0.26, body: 200, bodyDur: 0.15, drive: 0.35, tail: 0.16, gain: 0.28, smp: 0.42,
   },
   mid: {
-    sub: 48, subDur: 0.42, body: 165, bodyDur: 0.22, drive: 0.55, tail: 0.30, gain: 0.5,
+    sub: 48, subDur: 0.42, body: 165, bodyDur: 0.22, drive: 0.55, tail: 0.30, gain: 0.5, smp: 0.6,
   },
   heavy: {
-    sub: 40, subDur: 0.62, body: 128, bodyDur: 0.30, drive: 0.75, tail: 0.48, gain: 0.78,
+    sub: 40, subDur: 0.62, body: 128, bodyDur: 0.30, drive: 0.75, tail: 0.48, gain: 0.78, smp: 0.78,
   },
   super: {
-    sub: 33, subDur: 0.95, body: 100, bodyDur: 0.42, drive: 0.9, tail: 0.8, gain: 0.98,
+    sub: 33, subDur: 0.95, body: 100, bodyDur: 0.42, drive: 0.9, tail: 0.8, gain: 0.98, smp: 0.9,
   },
 };
 
@@ -157,6 +172,14 @@ export function hit(rank = 'mid', power = 0.5) {
   const r = RANKS[rank] ?? RANKS.mid;
   const t = ctx.currentTime;
   const p = Math.min(1, Math.max(0, power));
+
+  if (samples.play(`hit_${rank}`, r.smp, master, { detune: 0.03 })) {
+    // サンプルは質感を出す。重さはサブ層で足す（ランクごとに可変にできる）
+    tone('sine', r.sub * 2.1, r.sub * 0.55, t, r.gain * 0.8, r.subDur, master, 0.006);
+    if (rank === 'super') tone('sine', r.sub * 2.4, r.sub * 0.5, t + 0.17, r.gain * 0.6, 0.7);
+    return;
+  }
+
   const sat = saturator(r.drive);
 
   // 1. トランジェント（クラック）
@@ -201,6 +224,10 @@ export function combo(n) {
 export function miss() {
   if (!ready()) return;
   const t = ctx.currentTime;
+  if (samples.play('miss', 0.55, master, { detune: 0.04 })) {
+    tone('sine', 70, 40, t, 0.2, 0.22);
+    return;
+  }
   const sat = saturator(0.6);
   tone('sawtooth', 150, 72, t, 0.16, 0.19, sat);
   tone('sine', 70, 40, t, 0.24, 0.22);
@@ -211,6 +238,10 @@ export function miss() {
 export function hurt() {
   if (!ready()) return;
   const t = ctx.currentTime;
+  if (samples.play('hurt', 0.8, master, { detune: 0.02 })) {
+    tone('sine', 74, 34, t + 0.01, 0.5, 0.55);
+    return;
+  }
   const sat = saturator(0.8);
   noise(t, 0.4, 0.05, { type: 'highpass', freq: 3400, q: 0.6 });
   tone('sawtooth', 420, 60, t + 0.01, 0.32, 0.34, sat);
@@ -231,6 +262,12 @@ export function ko() {
   noise(t + 0.08, 0.3, 1.6, { type: 'lowpass', freq: 180, q: 0.5 });
   // 少し遅れた second impact で「沈む」感じを出す
   tone('sine', 62, 20, t + 0.34, 0.6, 1.5);
+}
+
+/** アナウンサーボイス。合成音に負けないよう持ち上げる */
+export function say(name, gain = VOICE_GAIN) {
+  if (!ready()) return;
+  samples.play(name, gain, master);
 }
 
 /** ROUND コール */

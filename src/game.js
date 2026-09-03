@@ -13,7 +13,6 @@ import {
 } from './screens.js';
 import * as fx from './fx.js';
 import * as sfx from './sound.js';
-import * as voice from './voice.js';
 import * as st from './stats.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -54,9 +53,6 @@ const MODES = [
 
 const FIGHT_MODES = MODES.filter((m) => m.kpm);
 const CALIB_MS = 10000;
-// アナウンサーは合成音に負けないよう持ち上げる（音源は -15 LUFS / TP -1dB 正規化済み）。
-// 2.2倍だと 0dBFS を超えてクリップしたので実測で詰めた値
-const VOICE_GAIN = 1.5;
 // リプレイと所要時間の記録を残す上限。長期戦でも際限なく溜めない
 const MAX_LOG = 40;
 
@@ -286,8 +282,8 @@ function startMatch(mode) {
   ], 'FIGHT');
 }
 
-function callRound() { sfx.round(); voice.play('round1', VOICE_GAIN); }
-function callFight() { sfx.bell(); voice.play('fight', VOICE_GAIN); }
+function callRound() { sfx.round(); sfx.say('round1'); }
+function callFight() { sfx.bell(); sfx.say('fight'); }
 
 const RANK_FX = {
   light: { stop: 45, shake: 5, count: 20, kb: 18, size: 3.2 },
@@ -350,10 +346,10 @@ function playerAttack() {
   if (counter) {
     callout('COUNTER!', 'counter');
     sfx.counter();
-    voice.play('counter', VOICE_GAIN);
+    sfx.say('counter');
   } else if (rank === 'super') {
     callout('SUPER!', 'super');
-    voice.play('super', VOICE_GAIN);
+    sfx.say('super');
   }
 
   closeRec('hit');
@@ -468,7 +464,7 @@ function finishMatch(outcome) {
   fx.flash('255,255,255', 0.35);
   fx.shake(26, 900);
   sfx.ko();
-  setTimeout(() => voice.play(outcome === 'WIN' ? 'ko' : 'lose', VOICE_GAIN * 1.15), 260);
+  setTimeout(() => sfx.say(outcome === 'WIN' ? 'ko' : 'lose'), 260);
   const at = fx.centerOf(outcome === 'WIN' ? p2 : p1);
   fx.burst(at.x, at.y, { count: 90, color: '#ffd23f', speed: 900, size: 4.5 });
   fx.burst(at.x, at.y, { count: 50, color: '#ff3b5c', speed: 640, size: 3.5 });
@@ -823,8 +819,7 @@ function frame(now) {
 }
 
 fx.initFx($('#fx'), stage);
-sfx.unlock();   // AudioContext を suspended のまま作る
-voice.preload();
+sfx.unlock();   // AudioContext を suspended のまま作り、音源のデコードも始める
 if (fx.reducedMotion) document.body.classList.add('reduced');
 titleScreen();
 requestAnimationFrame(frame);
