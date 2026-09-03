@@ -361,6 +361,34 @@ body.mode-train .tlabel { visibility: hidden; }
   100% { filter: none; transform: none; }
 }
 
+/* ---------- 開始ゲート ---------- */
+
+#startgate {
+  align-self: center;
+  margin-top: clamp(10px, 2.2vh, 22px);
+  padding: .7em 1.4em;
+  font: 800 clamp(.74rem, 1.9vw, .95rem)/1.5 var(--jp);
+  letter-spacing: .1em;
+  color: var(--ink);
+  background: rgba(63, 224, 255, .12);
+  border: 2px solid var(--p1);
+  cursor: pointer;
+  animation: gatePulse 1.6s ease-in-out infinite;
+}
+#startgate[hidden] { display: none; }
+#startgate:hover { background: rgba(63, 224, 255, .24); }
+#startgate:focus-visible { outline: 3px solid var(--gold); outline-offset: 3px; }
+#startgate small {
+  display: block;
+  margin-top: .3em;
+  font: 700 .82em/1.4 var(--jp);
+  letter-spacing: .06em;
+  opacity: .6;
+}
+@keyframes gatePulse {
+  50% { border-color: #fff; box-shadow: 0 0 26px rgba(63, 224, 255, .45); }
+}
+
 /* ---------- IME警告 ---------- */
 
 #ime-warn {
@@ -787,7 +815,8 @@ body.mode-replay #hud .side { visibility: hidden; }
 /* ---------- 動きを控える設定 ---------- */
 
 @media (prefers-reduced-motion: reduce) {
-  #bg, .hp.danger .hp-fill, #timer-fill.urgent, .ch.cursor, #ime-warn { animation: none; }
+  #bg, .hp.danger .hp-fill, #timer-fill.urgent, .ch.cursor, #ime-warn,
+  #startgate { animation: none; }
   .fighter.attack, .fighter.knockback, .fighter.hurt,
   #romaji.shakeout, #romaji.broken, #kanji.enter, #combo.pop { animation: none; }
   .ko-title, .logo-jp { animation: none; }

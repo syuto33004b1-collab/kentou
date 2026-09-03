@@ -28,6 +28,7 @@ const timerLabel = $('#timer-label');
 const overlay = $('#overlay');
 const imeWarn = $('#ime-warn');
 const trainBar = $('#train-bar');
+const startGate = $('#startgate');
 const p1 = $('#p1');
 const p2 = $('#p2');
 const soundBtn = $('#sound-toggle');
@@ -79,6 +80,7 @@ const S = {
   log: [],
   rec: null,
   calibEnd: 0,
+  gateTo: 'FIGHT',
   calibMode: null,
   result: null,
   prevResult: null,
@@ -165,6 +167,16 @@ function showOverlay(html) {
   overlay.hidden = false;
 }
 
+function showGate(main, sub) {
+  startGate.innerHTML = `${main}<small>${sub}</small>`;
+  startGate.hidden = false;
+}
+
+function hideGate() {
+  startGate.hidden = true;
+  startGate.blur();
+}
+
 function clearPrompt() {
   kanjiEl.textContent = '';
   kanaEl.textContent = '';
@@ -249,6 +261,7 @@ function resetMatch(mode) {
   stage.classList.remove('ko');
   imeWarn.hidden = true;
   fx.clear();
+  hideGate();
   stopReplay();
 }
 
@@ -276,6 +289,42 @@ function startMatch(mode) {
   renderHp('p');
   renderHp('c');
   renderCombo();
+  arm('FIGHT', 'Space で開始', '準備ができたら押す　—　そのまま打ち始めてもOK');
+}
+
+/**
+ * 開始待ち。時間を計るモード（対戦・診断）は、選んだ瞬間に時計を動かさず
+ * ここで止める。待っている間の時間は計測に入れない。
+ */
+function arm(to, main, sub) {
+  S.gateTo = to;
+  S.phase = 'READY_WAIT';
+  showGate(main, sub);
+  callout('READY?', 'ready');
+  sfx.round();
+}
+
+/** immediate は「待たずに打ち始めた」場合。コールを挟まず即座に始める */
+function begin(immediate) {
+  hideGate();
+  S.wordElapsed = 0;
+  // 待機中の時間をKPMや試合時間に含めない
+  S.matchStart = performance.now();
+  S.lastKeyAt = performance.now();
+
+  if (S.gateTo === 'CALIB') {
+    S.phase = 'CALIB';
+    S.calibEnd = performance.now() + CALIB_MS;
+    callout('計測開始', 'fight');
+    sfx.bell();
+    return;
+  }
+  if (immediate) {
+    S.phase = 'FIGHT';
+    callout('FIGHT!', 'fight');
+    callFight();
+    return;
+  }
   enterReady([
     { text: 'ROUND 1', kind: 'ready', ms: 700, play: callRound },
     { text: 'FIGHT!', kind: 'fight', ms: 420, play: callFight },
@@ -488,12 +537,9 @@ function startCalibration() {
   renderHp('p');
   renderHp('c');
   renderCombo();
-  S.phase = 'CALIB';
+  S.phase = 'CALIB'; // nextWord のティア選択に使う
   nextWord();
-  S.calibEnd = performance.now() + CALIB_MS;
-  S.lastKeyAt = performance.now();
-  callout('10秒 診断', 'ready');
-  sfx.round();
+  arm('CALIB', 'Space で10秒の計測を開始', 'そのまま打ち始めてもOK');
 }
 
 function finishCalibration() {
@@ -589,6 +635,7 @@ function titleScreen({ keepText, status } = {}) {
   clearPrompt();
   calloutEl.className = '';
   fx.clear();
+  hideGate();
   stopReplay();
   st.save(stats);
 
@@ -741,6 +788,14 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 
+  if (S.phase === 'READY_WAIT') {
+    if (k === 'Escape') { e.preventDefault(); titleScreen(); return; }
+    if (k === ' ' || k === 'Enter' || e.code === 'Space') { e.preventDefault(); begin(false); return; }
+    // 打ち始めたらそれを1打目として扱う。待つつもりがない人のキーを捨てない
+    if (k.length !== 1 || k.charCodeAt(0) < 33 || k.charCodeAt(0) > 126) return;
+    begin(true);
+  }
+
   if (k === 'Escape') { e.preventDefault(); titleScreen(); return; }
   if (!isPlaying()) return; // READY 中の打鍵はミスにしない
   if (k.length !== 1 || k.charCodeAt(0) < 33) return;
@@ -777,6 +832,12 @@ window.addEventListener('keydown', (e) => {
     strike('light', 0.4, '#3fe0ff');
     nextWord();
   } else playerAttack();
+});
+
+startGate.addEventListener('click', () => {
+  if (S.phase !== 'READY_WAIT') return;
+  sfx.unlock();
+  begin(false);
 });
 
 soundBtn.addEventListener('click', () => {
