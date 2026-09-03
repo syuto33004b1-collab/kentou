@@ -35,6 +35,15 @@ function resize() {
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
+/** 画面に残っているパーティクルと数値を消す。試合の切り替え用 */
+export function clear() {
+  particles.length = 0;
+  numbers.length = 0;
+  flashState.a = 0;
+  shakeState.mag = 0;
+  if (stage) stage.style.transform = '';
+}
+
 export function isFrozen(now) {
   return now < frozenUntil;
 }

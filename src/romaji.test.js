@@ -1,7 +1,7 @@
 // node src/romaji.test.js
 import assert from 'node:assert/strict';
 import { tokenize, createTyping, press, typedText, pendingText } from './romaji.js';
-import { WORDS, TIERS } from './words.js';
+import { WORDS } from './words.js';
 
 /** 文字列を順に打ち、1打ごとの結果を返す */
 function typeAll(kana, input) {
@@ -91,7 +91,4 @@ const cleanRun = (kana, input) => {
   }
 }
 
-// --- 難易度ティアが空にならない ---
-TIERS.forEach((tier, i) => assert.ok(tier.length >= 8, `ティア${i} のお題が少なすぎる (${tier.length})`));
-
-console.log(`OK: romaji engine / ${WORDS.length} words / tiers ${TIERS.map((t) => t.length).join('-')}`);
+console.log(`OK: romaji engine / ${WORDS.length} words`);

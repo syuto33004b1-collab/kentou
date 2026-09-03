@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>鍵闘 KENTOU — 格ゲー風タイピング</title>
-<meta name="description" content="ローマ字入力で技名を打ち切り、相手を沈める格ゲー風タイピング練習サイト。">
+<meta name="description" content="ローマ字入力で技名を打ち切り、相手を沈める格ゲー風タイピング練習サイト。時間制限なしの修練モードと苦手キー分析つき。">
 <meta name="color-scheme" content="dark">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='25' x='2' font-size='24'>鍵</text></svg>">
 <link rel="stylesheet" href="style.css">
@@ -31,10 +31,21 @@
     </div>
   </header>
 
+  <div id="train-bar" hidden>
+    <div class="tsel" id="tsel-tag" aria-label="カテゴリ"></div>
+    <div class="tsel" id="tsel-tier" aria-label="長さ"></div>
+    <dl id="train-stats">
+      <div><dt>打鍵</dt><dd id="tv-keys">0</dd></div>
+      <div><dt>正確率</dt><dd id="tv-acc">—</dd></div>
+      <div><dt>KPM</dt><dd id="tv-kpm">0</dd></div>
+    </dl>
+  </div>
+
   <main id="arena" aria-hidden="true">
     <div id="floor"></div>
-    <svg id="p1" class="fighter" viewBox="0 0 110 140"><use href="#fighter"/></svg>
-    <svg id="p2" class="fighter" viewBox="0 0 110 140"><use href="#fighter"/></svg>
+    <svg id="p1" class="fighter" viewBox="0 0 120 140"><use href="#fighter"/></svg>
+    <svg id="p2" class="fighter" viewBox="0 0 120 140"><use href="#fighter"/></svg>
+    <div id="callout" aria-hidden="true"></div>
   </main>
 
   <section id="prompt" aria-live="polite">
@@ -42,6 +53,11 @@
     <div id="kana"></div>
     <div id="romaji"></div>
   </section>
+
+  <p id="ime-warn" hidden role="status">
+    日本語入力（IME）がONです。<b>半角英数</b>に切り替えてください
+    <small>Windows: 半角/全角キー　—　macOS: かな/英数キー</small>
+  </p>
 
   <canvas id="fx" aria-hidden="true"></canvas>
   <div id="overlay" hidden></div>

@@ -24,7 +24,8 @@ html, body {
   position: relative;
   height: 100dvh;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  /* HUD / 修練バー / 闘技場 / お題。修練バーが display:none のときは3行目が潰れる */
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   will-change: transform;
 }
 
@@ -74,6 +75,11 @@ html, body {
   margin-bottom: 6px;
 }
 .side.right { text-align: right; }
+
+/* 修練モードは体力も制限時間も無いので、数値だけ消してコンボは残す */
+body.mode-train #hud .side,
+body.mode-train #timer,
+body.mode-train .tlabel { visibility: hidden; }
 
 .hp {
   position: relative;
@@ -128,8 +134,9 @@ html, body {
   width: 100%;
   background: linear-gradient(90deg, var(--p1), #b6f);
 }
+/* COUNTER 圏に入ったら色で知らせる */
 #timer-fill.urgent {
-  background: var(--danger);
+  background: var(--gold);
   animation: pulseHp .28s steps(2, end) infinite;
 }
 .tlabel {
@@ -137,6 +144,51 @@ html, body {
   letter-spacing: .3em;
   opacity: .45;
   margin-top: 6px;
+}
+
+/* ---------- 修練バー ---------- */
+
+#train-bar {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(6px, 1.6vw, 20px);
+  padding: clamp(6px, 1.4vh, 12px) clamp(12px, 3vw, 34px) 0;
+}
+#train-bar[hidden] { display: none; }
+
+.tsel { display: flex; gap: 4px; }
+.tsel button {
+  display: inline-flex;
+  align-items: baseline;
+  gap: .45em;
+  padding: .4em .75em;
+  font: 800 clamp(.66rem, 1.5vw, .8rem)/1 var(--jp);
+  letter-spacing: .06em;
+  color: var(--ink);
+  background: rgba(255, 255, 255, .07);
+  border: 2px solid rgba(255, 255, 255, .16);
+  cursor: pointer;
+}
+.tsel button:hover { background: rgba(255, 255, 255, .16); }
+.tsel button.on { background: var(--p1); color: #0a1a20; border-color: #fff; }
+.tsel button em { font: 700 .8em/1 var(--mono); font-style: normal; opacity: .55; }
+.tsel button.on em { opacity: .75; }
+.tsel button:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+
+#train-stats { display: flex; gap: clamp(10px, 2.4vw, 26px); }
+#train-stats div { text-align: center; }
+#train-stats dt {
+  font: 800 clamp(.52rem, 1.2vw, .64rem)/1 var(--jp);
+  letter-spacing: .18em;
+  opacity: .55;
+}
+#train-stats dd {
+  font: 900 clamp(.95rem, 2.4vw, 1.3rem)/1.2 var(--mono);
+  color: var(--gold);
 }
 
 /* ---------- 闘技場 ---------- */
@@ -162,10 +214,15 @@ html, body {
   bottom: 26%;
   height: clamp(112px, 24vh, 250px);
   filter: drop-shadow(0 0 26px currentColor);
+  transition: transform .12s ease-out;
 }
 #p1 { left: 11%; color: var(--p1); }
 #p2 { right: 11%; color: var(--p2); transform: scaleX(-1); }
 .fighter use { fill: currentColor; }
+
+/* 予兆。残り1〜2文字で踏み込む */
+#p1.wind { transform: translateX(12px) scale(1.06, .94); }
+#p2.wind { transform: scaleX(-1) translateX(12px) scale(1.06, .94); }
 
 #p1.attack { animation: lungeR .26s cubic-bezier(.1, 1.2, .3, 1); }
 #p2.attack { animation: lungeL .26s cubic-bezier(.1, 1.2, .3, 1); }
@@ -175,26 +232,57 @@ html, body {
 
 @keyframes lungeR {
   0% { transform: translateX(0) scale(1); }
-  25% { transform: translateX(42px) scale(1.14, .92); }
+  25% { transform: translateX(46px) scale(1.16, .9); }
   100% { transform: translateX(0) scale(1); }
 }
 @keyframes lungeL {
   0% { transform: scaleX(-1) translateX(0); }
-  25% { transform: scaleX(-1) translateX(42px) scale(1.14, .92); }
+  25% { transform: scaleX(-1) translateX(46px) scale(1.16, .9); }
   100% { transform: scaleX(-1) translateX(0); }
 }
+/* --kb はダメージ階級ごとに JS が入れる */
 @keyframes kbR {
   0% { transform: scaleX(-1) translateX(0) rotate(0); }
-  30% { transform: scaleX(-1) translateX(-34px) rotate(7deg); }
+  30% { transform: scaleX(-1) translateX(calc(-1 * var(--kb, 30px))) rotate(8deg); }
   100% { transform: scaleX(-1) translateX(0) rotate(0); }
 }
 @keyframes kbL {
   0% { transform: translateX(0) rotate(0); }
-  30% { transform: translateX(-34px) rotate(-7deg); }
+  30% { transform: translateX(calc(-1 * var(--kb, 30px))) rotate(-8deg); }
   100% { transform: translateX(0) rotate(0); }
 }
 @keyframes hurtFlash {
   50% { filter: drop-shadow(0 0 26px currentColor) brightness(4) saturate(0) contrast(3); }
+}
+
+/* ---------- アナウンス ---------- */
+
+#callout {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  z-index: 30;
+  font: italic 900 clamp(1.7rem, 5.6vw, 4rem)/1 var(--jp);
+  letter-spacing: .04em;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  paint-order: stroke fill;
+  -webkit-text-stroke: clamp(3px, .8vw, 7px) #180826;
+  transform: translate(-50%, -50%);
+}
+#callout.show { animation: calloutIn .8s cubic-bezier(.1, 1.5, .3, 1) forwards; }
+#callout.ready { color: var(--p1); }
+#callout.fight { color: var(--gold); font-size: clamp(2.4rem, 8vw, 5.4rem); }
+#callout.counter { color: #ff5ce0; }
+#callout.super { color: #ffb03f; font-size: clamp(2.2rem, 7vw, 4.8rem); }
+#callout.hurt { color: var(--p2); font-size: clamp(1.4rem, 4.4vw, 3rem); }
+
+@keyframes calloutIn {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(2.6) skewX(-10deg); }
+  16% { opacity: 1; transform: translate(-50%, -50%) scale(1) skewX(-10deg); }
+  68% { opacity: 1; transform: translate(-50%, -50%) scale(1) skewX(-10deg); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.08) skewX(-10deg); }
 }
 
 /* ---------- お題 ---------- */
@@ -202,6 +290,7 @@ html, body {
 #prompt {
   position: relative;
   z-index: 20;
+  grid-row: 4;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -218,10 +307,11 @@ html, body {
   text-shadow: 0 0 34px rgba(255, 210, 63, .45), 5px 6px 0 rgba(0, 0, 0, .55);
   min-height: 1.1em;
 }
-#kanji.enter { animation: slam .22s cubic-bezier(.1, 1.4, .3, 1); }
+/* opacity 0 から始めると、お題が出た瞬間だけ漢字が読めなくなる */
+#kanji.enter { animation: slam .2s cubic-bezier(.1, 1.4, .3, 1); }
 @keyframes slam {
-  0% { transform: skewX(-7deg) scale(1.5); opacity: 0; filter: blur(6px); }
-  100% { transform: skewX(-7deg) scale(1); opacity: 1; filter: none; }
+  0% { transform: skewX(-7deg) scale(1.45); filter: blur(4px); }
+  100% { transform: skewX(-7deg) scale(1); filter: none; }
 }
 
 #kana {
@@ -271,6 +361,33 @@ html, body {
   100% { filter: none; transform: none; }
 }
 
+/* ---------- IME警告 ---------- */
+
+#ime-warn {
+  position: absolute;
+  left: 50%;
+  bottom: clamp(56px, 9vh, 84px);
+  z-index: 45;
+  max-width: min(560px, 92vw);
+  padding: .7em 1.1em;
+  text-align: center;
+  font: 800 clamp(.72rem, 1.9vw, .92rem)/1.5 var(--jp);
+  color: #1a0629;
+  background: var(--gold);
+  border: 2px solid #fff;
+  box-shadow: 0 6px 26px rgba(0, 0, 0, .55);
+  transform: translateX(-50%);
+  animation: warnPulse 1.5s ease-in-out infinite;
+}
+#ime-warn[hidden] { display: none; }
+#ime-warn small {
+  display: block;
+  margin-top: .25em;
+  font: 700 .82em/1.4 var(--jp);
+  opacity: .7;
+}
+@keyframes warnPulse { 50% { box-shadow: 0 6px 26px rgba(255, 210, 63, .55); } }
+
 /* ---------- オーバーレイ ---------- */
 
 #fx {
@@ -291,10 +408,11 @@ html, body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: clamp(10px, 2.4vh, 26px);
-  padding: 5vw;
+  gap: clamp(8px, 2vh, 22px);
+  padding: 4vw;
+  overflow-y: auto;
   text-align: center;
-  background: rgba(8, 3, 14, .78);
+  background: rgba(8, 3, 14, .8);
   backdrop-filter: blur(7px);
 }
 #overlay[hidden] { display: none; }
@@ -302,7 +420,7 @@ html, body {
 .logo { line-height: .9; }
 .logo-jp {
   display: block;
-  font: 900 clamp(4rem, 17vw, 11rem)/1 var(--jp);
+  font: 900 clamp(3.4rem, 14vw, 9rem)/1 var(--jp);
   letter-spacing: .06em;
   transform: skewX(-8deg);
   paint-order: stroke fill;
@@ -312,7 +430,7 @@ html, body {
 }
 .logo-en {
   display: block;
-  font: 800 clamp(.85rem, 3vw, 1.6rem)/1 var(--mono);
+  font: 800 clamp(.8rem, 2.6vw, 1.4rem)/1 var(--mono);
   letter-spacing: .7em;
   color: var(--p1);
   text-shadow: 0 0 22px var(--p1);
@@ -320,41 +438,88 @@ html, body {
 }
 
 .tagline {
-  font: 700 clamp(.8rem, 2.2vw, 1.15rem)/1.6 var(--jp);
+  font: 700 clamp(.8rem, 2.2vw, 1.1rem)/1.6 var(--jp);
   letter-spacing: .18em;
   color: rgba(244, 236, 255, .72);
 }
 
-.diff { list-style: none; display: grid; gap: 10px; width: min(430px, 88vw); }
+.rules {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: clamp(6px, 1.6vw, 14px);
+}
+.rules li {
+  padding: .45em .8em;
+  font: 700 clamp(.7rem, 1.8vw, .9rem)/1 var(--jp);
+  letter-spacing: .06em;
+  color: rgba(244, 236, 255, .72);
+  background: rgba(255, 255, 255, .05);
+  border-left: 3px solid var(--p1);
+}
+.rules b { color: var(--gold); }
+
+.diff { list-style: none; display: grid; gap: 8px; width: min(520px, 92vw); }
 .diff li {
   display: grid;
   grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 14px;
-  padding: clamp(8px, 1.6vh, 14px) clamp(12px, 3vw, 20px);
+  gap: 12px;
+  padding: clamp(7px, 1.4vh, 12px) clamp(12px, 3vw, 18px);
   background: rgba(255, 255, 255, .06);
-  border: 2px solid rgba(255, 255, 255, .18);
+  border: 2px solid rgba(255, 255, 255, .16);
   border-left: 5px solid var(--p1);
   transform: skewX(-9deg);
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
 }
 .diff li > * { transform: skewX(9deg); }
 .diff li:nth-child(2) { border-left-color: var(--gold); }
 .diff li:nth-child(3) { border-left-color: var(--p2); }
-.diff span { font: 800 clamp(.8rem, 2.1vw, 1.05rem)/1 var(--jp); letter-spacing: .1em; text-align: left; }
-.diff em { font: 700 .78rem/1 var(--mono); opacity: .55; font-style: normal; }
-
-.diff li { cursor: pointer; transition: background .15s, border-color .15s; }
-.diff li:hover { background: rgba(255, 255, 255, .14); border-color: rgba(255, 255, 255, .4); }
-
-.nokb {
-  display: none;
-  font: 700 .8rem/1.6 var(--jp);
-  letter-spacing: .1em;
+.diff li:nth-child(4) { border-left-color: #9d6bff; }
+.diff li.pick { background: rgba(255, 210, 63, .12); border-color: rgba(255, 210, 63, .45); }
+.diff li:hover { background: rgba(255, 255, 255, .16); border-color: rgba(255, 255, 255, .4); }
+.diff span {
+  text-align: left;
+  font: 800 clamp(.78rem, 2vw, .98rem)/1.3 var(--jp);
+  letter-spacing: .05em;
+}
+.diff span b { font-size: 1.14em; }
+.diff span em {
+  display: block;
+  font: 700 .8em/1.4 var(--jp);
+  font-style: normal;
+  letter-spacing: .04em;
+  opacity: .55;
+}
+.diff i {
+  font: 900 clamp(.82rem, 2.1vw, 1.05rem)/1 var(--mono);
+  font-style: normal;
   color: var(--gold);
+  white-space: nowrap;
 }
-@media (hover: none) and (pointer: coarse) {
-  .nokb { display: block; }
+.diff i small { font-size: .55em; opacity: .7; margin-left: .2em; }
+
+.rtable {
+  width: min(560px, 92vw);
+  font: 700 clamp(.66rem, 1.6vw, .8rem)/1.6 var(--jp);
 }
+.rtable summary {
+  cursor: pointer;
+  padding: .5em;
+  letter-spacing: .12em;
+  color: var(--p1);
+}
+.rtable table { width: 100%; margin-top: .4em; border-collapse: collapse; }
+.rtable th, .rtable td {
+  padding: .32em .5em;
+  border: 1px solid rgba(255, 255, 255, .14);
+  text-align: left;
+}
+.rtable th { width: 3.6em; text-align: center; background: rgba(255, 255, 255, .07); }
+.rtable td { font-family: var(--mono); opacity: .85; }
+.rtable > p { margin-top: .5em; opacity: .55; }
 
 kbd {
   display: inline-grid;
@@ -369,13 +534,24 @@ kbd {
 }
 
 .keys {
-  font: 700 clamp(.7rem, 1.8vw, .9rem)/1.8 var(--jp);
+  font: 700 clamp(.7rem, 1.8vw, .88rem)/1.8 var(--jp);
+  letter-spacing: .08em;
+  opacity: .78;
+}
+.keys b { color: var(--gold); }
+
+.nokb {
+  display: none;
+  font: 700 .8rem/1.6 var(--jp);
   letter-spacing: .1em;
-  opacity: .75;
+  color: var(--gold);
+}
+@media (hover: none) and (pointer: coarse) {
+  .nokb { display: block; }
 }
 
 .ko-title {
-  font: 900 clamp(3.4rem, 15vw, 9rem)/1 var(--jp);
+  font: 900 clamp(2.8rem, 13vw, 8rem)/1 var(--jp);
   letter-spacing: .04em;
   transform: skewX(-8deg);
   paint-order: stroke fill;
@@ -383,12 +559,23 @@ kbd {
   animation: koSlam .4s cubic-bezier(.1, 1.5, .3, 1);
 }
 .ko-title.win { color: var(--gold); text-shadow: 0 0 50px rgba(255, 210, 63, .7); }
-.ko-title.lose { color: var(--p2); text-shadow: 0 0 50px rgba(255, 59, 122, .7); }
+.ko-title.lose {
+  /* K.O. の4文字より長いので、同じ字送りだと横に溢れる */
+  font-size: clamp(2rem, 9vw, 5.6rem);
+  color: var(--p2);
+  text-shadow: 0 0 50px rgba(255, 59, 122, .7);
+}
+.ko-title.pause { font-size: clamp(2rem, 9vw, 5.6rem); }
+.ko-title.pause { color: var(--p1); text-shadow: 0 0 50px rgba(63, 224, 255, .6); }
 @keyframes koSlam {
   0% { transform: skewX(-8deg) scale(3.4); opacity: 0; filter: blur(14px); }
   100% { transform: skewX(-8deg) scale(1); opacity: 1; filter: none; }
 }
-.ko-sub { font: 700 clamp(.8rem, 2.2vw, 1.1rem)/1 var(--jp); letter-spacing: .3em; opacity: .65; }
+.ko-sub {
+  font: 700 clamp(.74rem, 2vw, 1rem)/1.5 var(--jp);
+  letter-spacing: .2em;
+  opacity: .65;
+}
 
 .stats {
   display: grid;
@@ -397,17 +584,60 @@ kbd {
   width: min(560px, 92vw);
 }
 .stats div {
-  padding: clamp(8px, 1.6vh, 14px) 4px;
+  padding: clamp(7px, 1.4vh, 12px) 4px;
   background: rgba(255, 255, 255, .06);
   border-top: 3px solid var(--p1);
 }
 .stats dt { font: 800 clamp(.55rem, 1.4vw, .72rem)/1 var(--jp); letter-spacing: .18em; opacity: .6; }
 .stats dd {
-  font: 900 clamp(1.3rem, 4.4vw, 2.2rem)/1.2 var(--mono);
+  font: 900 clamp(1.2rem, 4vw, 2rem)/1.2 var(--mono);
   color: var(--gold);
   text-shadow: 0 0 20px rgba(255, 210, 63, .5);
 }
 .stats small { font-size: .5em; opacity: .7; }
+.stats dd i {
+  display: block;
+  font: 800 .42em/1.5 var(--mono);
+  font-style: normal;
+  letter-spacing: .04em;
+  text-shadow: none;
+}
+.stats dd i.up { color: #5cf08a; }
+.stats dd i.down { color: #ff6a8a; }
+.stats dd i.flat { color: rgba(244, 236, 255, .4); }
+
+.weak { width: min(520px, 92vw); }
+.weak h3 {
+  font: 800 clamp(.6rem, 1.5vw, .74rem)/1 var(--jp);
+  letter-spacing: .2em;
+  opacity: .6;
+  margin-bottom: .55em;
+}
+.weak ul {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: clamp(6px, 1.6vw, 14px);
+}
+.weak li {
+  display: grid;
+  place-items: center;
+  min-width: 3.4em;
+  padding: .4em .5em;
+  background: rgba(255, 59, 122, .14);
+  border-top: 3px solid var(--p2);
+}
+.weak li b { font: 900 clamp(1rem, 2.8vw, 1.4rem)/1 var(--mono); color: #fff; }
+.weak li em { font: 700 .7rem/1.4 var(--mono); font-style: normal; color: var(--p2); }
+.weak-none { font: 700 .78rem/1.5 var(--jp); opacity: .45; }
+
+.best-line {
+  font: 700 clamp(.66rem, 1.6vw, .82rem)/1.6 var(--jp);
+  letter-spacing: .08em;
+  opacity: .7;
+}
+.best-line b { font-family: var(--mono); color: var(--gold); }
 
 #sound-toggle {
   position: absolute;
@@ -430,9 +660,14 @@ kbd {
 /* ---------- 動きを控える設定 ---------- */
 
 @media (prefers-reduced-motion: reduce) {
-  #bg, .hp.danger .hp-fill, #timer-fill.urgent, .ch.cursor { animation: none; }
+  #bg, .hp.danger .hp-fill, #timer-fill.urgent, .ch.cursor, #ime-warn { animation: none; }
   .fighter.attack, .fighter.knockback, .fighter.hurt,
   #romaji.shakeout, #romaji.broken, #kanji.enter, #combo.pop { animation: none; }
   .ko-title, .logo-jp { animation: none; }
+  .fighter { transition: none; }
+  #p1.wind { transform: none; }
+  #p2.wind { transform: scaleX(-1); }
   #scan { display: none; }
+  /* アナウンスは動かさず、出したまま置く */
+  #callout.show { animation: none; opacity: 1; }
 }
