@@ -1,9 +1,19 @@
-// SEはすべてWeb Audio APIの合成音。音源ファイルは持たない。
+// 打撃音・被弾音・KO音はすべて Web Audio API の合成。音源ファイルは持たない。
+//
+// 薄い音にならないよう、1発を4層で作る:
+//   1. トランジェント … 高域ノイズの極短バースト（当たった瞬間のクラック）
+//   2. ボディ ……………… サチュレーションを通した中低域（倍音が出て「ドン」になる）
+//   3. サブ ……………… 30〜60Hz の正弦波。重厚感の正体はここ。歪ませず深く伸ばす
+//   4. テール ………… ローパスを通したノイズの長い減衰（空間と破片）
+// マスターにコンプを挟んで層を糊付けする。これが無いと重ねた分だけ潰れる。
 
 let ctx = null;
 let master = null;
-let noise = null;
+let noiseBuf = null;
 let enabled = true;
+const saturators = new Map();
+
+const MASTER_GAIN = 0.55;
 
 /** AudioContext はユーザー操作で初めて生成・resume する（autoplay policy対策） */
 export function unlock() {
@@ -11,25 +21,46 @@ export function unlock() {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     ctx = new AC();
-    master = ctx.createGain();
-    master.gain.value = enabled ? 0.7 : 0;
-    master.connect(ctx.destination);
 
-    const len = Math.floor(ctx.sampleRate * 0.6);
-    noise = ctx.createBuffer(1, len, ctx.sampleRate);
-    const data = noise.getChannelData(0);
+    // 層を重ねても潰れないように、出口で軽く締める
+    const comp = ctx.createDynamicsCompressor();
+    // 強く掛けると弱・中・強・必殺の差が潰れる。糊付けだけに留める
+    comp.threshold.value = -6;
+    comp.knee.value = 6;
+    comp.ratio.value = 2.5;
+    comp.attack.value = 0.003;
+    comp.release.value = 0.18;
+    comp.connect(ctx.destination);
+
+    master = ctx.createGain();
+    master.gain.value = enabled ? MASTER_GAIN : 0;
+    master.connect(comp);
+
+    const len = Math.floor(ctx.sampleRate * 1.5);
+    noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const data = noiseBuf.getChannelData(0);
     for (let i = 0; i < len; i += 1) data[i] = Math.random() * 2 - 1;
   }
-  if (ctx.state === 'suspended') ctx.resume();
+  // 起動時（ジェスチャ前）にも呼ぶので、拒否されても黙って進む
+  if (ctx.state === 'suspended') ctx.resume().catch(() => {});
 }
 
 export function setEnabled(v) {
   enabled = v;
-  if (master) master.gain.value = v ? 0.7 : 0;
+  if (master) master.gain.value = v ? MASTER_GAIN : 0;
 }
 
 export function isEnabled() {
   return enabled;
+}
+
+export function context() {
+  return ctx;
+}
+
+/** ボイス再生などをマスター経由で鳴らすための接続先 */
+export function bus() {
+  return master;
 }
 
 function ready() {
@@ -37,54 +68,87 @@ function ready() {
 }
 
 /** peak まで立ち上げて dur 秒で減衰するゲイン */
-function envelope(t0, peak, dur, attack = 0.004) {
+function env(t0, peak, dur, attack = 0.004, dest = master) {
   const g = ctx.createGain();
   g.gain.setValueAtTime(0.0001, t0);
   g.gain.linearRampToValueAtTime(peak, t0 + attack);
   g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-  g.connect(master);
+  g.connect(dest);
   return g;
 }
 
-function tone(type, f0, f1, t0, peak, dur) {
+/** tanh 風のカーブで倍音を作る。amount が大きいほど歪む */
+function saturator(amount) {
+  const key = Math.round(amount * 20);
+  if (saturators.has(key)) return saturators.get(key);
+  const n = 1024;
+  const curve = new Float32Array(n);
+  const k = 1 + amount * 40;
+  for (let i = 0; i < n; i += 1) {
+    const x = (i / (n - 1)) * 2 - 1;
+    curve[i] = Math.tanh(k * x) / Math.tanh(k);
+  }
+  const ws = ctx.createWaveShaper();
+  ws.curve = curve;
+  ws.oversample = '2x';
+  const out = ctx.createGain();
+  // 歪ませると音量が上がるので下げ戻す
+  out.gain.value = 1 / (1 + amount * 1.6);
+  ws.connect(out);
+  out.connect(master);
+  saturators.set(key, ws);
+  return ws;
+}
+
+function tone(type, f0, f1, t0, peak, dur, dest = master, attack = 0.004) {
   const o = ctx.createOscillator();
   o.type = type;
   o.frequency.setValueAtTime(f0, t0);
   if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(f1, 1), t0 + dur);
-  o.connect(envelope(t0, peak, dur));
+  o.connect(env(t0, peak, dur, attack, dest));
   o.start(t0);
-  o.stop(t0 + dur + 0.02);
+  o.stop(t0 + dur + 0.05);
 }
 
-function burstNoise(t0, peak, dur, freq, q = 1) {
+function noise(t0, peak, dur, {
+  type = 'bandpass', freq = 1200, q = 1, dest = master,
+} = {}) {
   const src = ctx.createBufferSource();
-  src.buffer = noise;
-  const bp = ctx.createBiquadFilter();
-  bp.type = 'bandpass';
-  bp.frequency.value = freq;
-  bp.Q.value = q;
-  src.connect(bp);
-  bp.connect(envelope(t0, peak, dur, 0.002));
-  src.start(t0);
-  src.stop(t0 + dur + 0.02);
+  src.buffer = noiseBuf;
+  src.playbackRate.value = 0.8 + Math.random() * 0.4;
+  const f = ctx.createBiquadFilter();
+  f.type = type;
+  f.frequency.value = freq;
+  f.Q.value = q;
+  src.connect(f);
+  f.connect(env(t0, peak, dur, 0.002, dest));
+  src.start(t0, Math.random() * 0.5);
+  src.stop(t0 + dur + 0.05);
 }
 
-/** 1打ごとの軽いクリック。コンボが伸びるとピッチが上がる */
+/** 1打ごとの手応え。ビープにならないよう、ノイズのクリックを主にする */
 export function key(combo = 0) {
   if (!ready()) return;
   const t = ctx.currentTime;
-  const f = 1150 + Math.min(combo, 24) * 45;
-  tone('square', f, f * 0.7, t, 0.045, 0.035);
-  burstNoise(t, 0.02, 0.02, 4200, 0.7);
+  const f = 1900 + Math.min(combo, 24) * 90;
+  noise(t, 0.3, 0.022, { freq: f, q: 2.4 });
+  tone('triangle', 620 + Math.min(combo, 24) * 24, 300, t, 0.12, 0.06);
 }
 
-// 攻撃の階級ごとに、音の重さそのものを変える。
-// 一律だと何を打っても「中攻撃」に聞こえる
+// 弱・中・強・必殺。層の厚みと減衰の長さで重さを分ける
 const RANKS = {
-  light: { f: 320, dur: 0.13, gain: 0.28, nf: 2000, nd: 0.05 },
-  mid: { f: 250, dur: 0.22, gain: 0.4, nf: 1700, nd: 0.09 },
-  heavy: { f: 190, dur: 0.34, gain: 0.5, nf: 1200, nd: 0.14 },
-  super: { f: 140, dur: 0.55, gain: 0.58, nf: 900, nd: 0.22 },
+  light: {
+    sub: 58, subDur: 0.26, body: 200, bodyDur: 0.15, drive: 0.35, tail: 0.16, gain: 0.28,
+  },
+  mid: {
+    sub: 48, subDur: 0.42, body: 165, bodyDur: 0.22, drive: 0.55, tail: 0.30, gain: 0.5,
+  },
+  heavy: {
+    sub: 40, subDur: 0.62, body: 128, bodyDur: 0.30, drive: 0.75, tail: 0.48, gain: 0.78,
+  },
+  super: {
+    sub: 33, subDur: 0.95, body: 100, bodyDur: 0.42, drive: 0.9, tail: 0.8, gain: 0.98,
+  },
 };
 
 /** お題を打ち切った瞬間の打撃音。rank は light/mid/heavy/super */
@@ -93,76 +157,96 @@ export function hit(rank = 'mid', power = 0.5) {
   const r = RANKS[rank] ?? RANKS.mid;
   const t = ctx.currentTime;
   const p = Math.min(1, Math.max(0, power));
+  const sat = saturator(r.drive);
 
-  tone('sine', r.f + p * 90, 34, t, r.gain, r.dur);
-  tone('triangle', r.f * 0.5, 28, t, r.gain * 0.7, r.dur * 1.3);
-  burstNoise(t, r.gain * 0.8, r.nd, r.nf + p * 900, 0.6);
-  burstNoise(t + 0.012, r.gain * 0.4, r.nd * 2, 420, 0.9);
+  // 1. トランジェント（クラック）
+  noise(t, r.gain * 0.55, 0.014, { type: 'highpass', freq: 2600 + p * 1800, q: 0.7 });
+  // 2. ボディ（歪ませて倍音を出す）
+  tone('triangle', r.body * 2.2, r.body * 0.5, t, r.gain * 0.85, r.bodyDur, sat, 0.002);
+  tone('square', r.body * 1.2, r.body * 0.4, t, r.gain * 0.3, r.bodyDur * 0.7, sat, 0.002);
+  // 3. サブ（重厚感の正体。歪ませない）
+  tone('sine', r.sub * 2.1, r.sub * 0.55, t, r.gain, r.subDur, master, 0.006);
+  // 4. テール（空間と破片）
+  noise(t + 0.01, r.gain * 0.3, r.tail, { type: 'lowpass', freq: 700, q: 0.6 });
 
   if (rank === 'super') {
     // 溜めの立ち上がりと、追い討ちの second impact
-    tone('sawtooth', 180, 1400, t, 0.14, 0.3);
-    tone('sine', 200, 30, t + 0.16, 0.45, 0.5);
-    burstNoise(t + 0.16, 0.34, 0.3, 700, 0.4);
+    tone('sawtooth', 160, 1500, t, 0.1, 0.26, sat);
+    tone('sine', r.sub * 2.4, r.sub * 0.5, t + 0.17, r.gain * 0.9, 0.7);
+    tone('triangle', r.body * 1.8, r.body * 0.45, t + 0.17, r.gain * 0.6, 0.3, sat, 0.002);
+    noise(t + 0.17, r.gain * 0.4, 0.5, { type: 'lowpass', freq: 900, q: 0.5 });
   }
 }
 
-/** 残り時間ぎりぎりの完打 */
+/** 残り時間ぎりぎりの完打。金属質のカウンター音 */
 export function counter() {
   if (!ready()) return;
   const t = ctx.currentTime;
-  tone('square', 1760, 1760, t, 0.13, 0.09);
-  tone('square', 2640, 2640, t + 0.02, 0.1, 0.16);
-  burstNoise(t, 0.12, 0.06, 6000, 1.2);
+  const sat = saturator(0.5);
+  noise(t, 0.16, 0.03, { type: 'highpass', freq: 5000, q: 0.8 });
+  tone('square', 1760, 1720, t, 0.12, 0.1, sat);
+  tone('square', 2640, 2600, t + 0.015, 0.09, 0.22, sat);
+  tone('sine', 90, 44, t, 0.3, 0.3);
 }
 
 /** コンボ更新のブリップ */
 export function combo(n) {
   if (!ready()) return;
-  const t = ctx.currentTime + 0.04;
+  const t = ctx.currentTime + 0.05;
   const f = 520 + Math.min(n, 24) * 55;
-  tone('square', f, f * 1.6, t, 0.09, 0.09);
+  tone('triangle', f, f * 1.7, t, 0.07, 0.1, saturator(0.3));
 }
 
-/** ミスタイプ */
+/** ミスタイプ。鈍く、短く */
 export function miss() {
   if (!ready()) return;
   const t = ctx.currentTime;
-  tone('sawtooth', 165, 88, t, 0.18, 0.17);
-  burstNoise(t, 0.09, 0.1, 280, 0.8);
+  const sat = saturator(0.6);
+  tone('sawtooth', 150, 72, t, 0.16, 0.19, sat);
+  tone('sine', 70, 40, t, 0.24, 0.22);
+  noise(t, 0.08, 0.09, { type: 'lowpass', freq: 400, q: 0.7 });
 }
 
-/** プレイヤーが被弾。ガードを割られた感を出す */
+/** プレイヤーが被弾。ガードを割られる金属音から低域のスイープへ */
 export function hurt() {
   if (!ready()) return;
   const t = ctx.currentTime;
-  burstNoise(t, 0.3, 0.05, 3200, 0.5);
-  tone('sawtooth', 330, 52, t + 0.02, 0.32, 0.3);
-  tone('triangle', 140, 46, t + 0.02, 0.26, 0.4);
-  burstNoise(t + 0.03, 0.24, 0.2, 620, 0.5);
+  const sat = saturator(0.8);
+  noise(t, 0.4, 0.05, { type: 'highpass', freq: 3400, q: 0.6 });
+  tone('sawtooth', 420, 60, t + 0.01, 0.32, 0.34, sat);
+  tone('sine', 74, 34, t + 0.01, 0.55, 0.55);
+  noise(t + 0.03, 0.26, 0.42, { type: 'lowpass', freq: 620, q: 0.5 });
 }
 
 /** K.O. の轟音 */
 export function ko() {
   if (!ready()) return;
   const t = ctx.currentTime;
-  tone('sine', 90, 24, t, 0.55, 1.4);
-  tone('triangle', 180, 40, t, 0.3, 0.9);
-  burstNoise(t, 0.4, 0.5, 320, 0.4);
-  burstNoise(t + 0.06, 0.24, 1.0, 130, 0.5);
+  const sat = saturator(0.9);
+  noise(t, 0.5, 0.03, { type: 'highpass', freq: 3000, q: 0.5 });
+  tone('sine', 78, 22, t, 0.85, 1.9);
+  tone('triangle', 130, 30, t, 0.5, 1.1, sat);
+  tone('sawtooth', 200, 26, t + 0.02, 0.22, 0.8, sat);
+  noise(t, 0.42, 0.7, { type: 'lowpass', freq: 420, q: 0.4 });
+  noise(t + 0.08, 0.3, 1.6, { type: 'lowpass', freq: 180, q: 0.5 });
+  // 少し遅れた second impact で「沈む」感じを出す
+  tone('sine', 62, 20, t + 0.34, 0.6, 1.5);
 }
 
 /** ROUND コール */
 export function round() {
   if (!ready()) return;
   const t = ctx.currentTime;
-  tone('square', 440, 440, t, 0.13, 0.22);
+  tone('triangle', 440, 436, t, 0.14, 0.26, saturator(0.25));
+  tone('sine', 110, 106, t, 0.2, 0.3);
 }
 
 /** FIGHT コール */
 export function bell() {
   if (!ready()) return;
   const t = ctx.currentTime;
-  tone('square', 880, 880, t, 0.16, 0.12);
-  tone('square', 1320, 1320, t + 0.14, 0.16, 0.26);
+  const sat = saturator(0.3);
+  tone('triangle', 880, 876, t, 0.15, 0.14, sat);
+  tone('triangle', 1320, 1316, t + 0.15, 0.15, 0.3, sat);
+  tone('sine', 130, 100, t, 0.26, 0.4);
 }

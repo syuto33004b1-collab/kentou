@@ -65,7 +65,8 @@ export function titleHtml({
       <div class="myrow">使うお題：${srcButtons}</div>
       <p id="my-status" class="mystatus"></p>
     </details>
-    <p class="nokb">この先は物理キーボードが必要です</p>`;
+    <p class="nokb">この先は物理キーボードが必要です</p>
+    <p class="credit">アナウンサーボイスは <a href="https://elevenlabs.io" target="_blank" rel="noopener">ElevenLabs</a> で生成しています</p>`;
 }
 
 export function pauseHtml() {
