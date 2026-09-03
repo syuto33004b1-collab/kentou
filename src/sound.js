@@ -156,13 +156,13 @@ const RANKS = {
     sub: 58, subDur: 0.26, body: 200, bodyDur: 0.15, drive: 0.35, tail: 0.16, gain: 0.28, smp: 0.42,
   },
   mid: {
-    sub: 48, subDur: 0.42, body: 165, bodyDur: 0.22, drive: 0.55, tail: 0.30, gain: 0.5, smp: 0.6,
+    sub: 48, subDur: 0.42, body: 165, bodyDur: 0.22, drive: 0.55, tail: 0.30, gain: 0.5, smp: 0.8,
   },
   heavy: {
-    sub: 40, subDur: 0.62, body: 128, bodyDur: 0.30, drive: 0.75, tail: 0.48, gain: 0.78, smp: 0.78,
+    sub: 40, subDur: 0.62, body: 128, bodyDur: 0.30, drive: 0.75, tail: 0.48, gain: 0.78, smp: 0.8,
   },
   super: {
-    sub: 33, subDur: 0.95, body: 100, bodyDur: 0.42, drive: 0.9, tail: 0.8, gain: 0.98, smp: 0.9,
+    sub: 33, subDur: 0.95, body: 100, bodyDur: 0.42, drive: 0.9, tail: 0.8, gain: 0.98, smp: 1.1,
   },
 };
 
