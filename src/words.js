@@ -1,8 +1,12 @@
+import { tokenize } from './romaji.js';
+import * as store from './store.js';
+
 // お題。kanji は表示用、kana は判定用（ひらがな）、tag はカテゴリ。
 export const TAGS = [
   { id: 'waza', label: '技名' },
   { id: 'term', label: '格ゲー用語' },
   { id: 'line', label: '実況セリフ' },
+  { id: 'mine', label: '自作' },
 ];
 
 export const WORDS = [
@@ -130,9 +134,116 @@ export function tierOf(word) {
   return 2;
 }
 
+// --- 自作お題 ---
+
+export const MAX_CUSTOM = 300;
+export const MAX_KANA = 40;
+export const SOURCES = [
+  { id: 'builtin', label: '既定のみ' },
+  { id: 'both', label: '既定＋自作' },
+  { id: 'custom', label: '自作のみ' },
+];
+
+let custom = [];
+let source = 'builtin';
+
+const NEWLINE_RE = /\r?\n/;
+const SEP_RE = /[,，、\t]/;
+
+/**
+ * 入力テキストを1行1お題として検証する。
+ * 書式は `漢字,かな` か `かな` だけ。# 始まりの行と空行は無視。
+ * 打てない綴りを混ぜたまま出題すると詰むので、ここで必ず tokenize を通す。
+ */
+export function parseWordList(text) {
+  const words = [];
+  const errors = [];
+  const seen = new Set();
+
+  String(text ?? '').split(NEWLINE_RE).forEach((raw, i) => {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) return;
+    if (words.length >= MAX_CUSTOM) {
+      errors.push({ line: i + 1, text: line, reason: `お題は${MAX_CUSTOM}件までです` });
+      return;
+    }
+
+    const parts = line.split(SEP_RE).map((p) => p.trim());
+    const kana = (parts.length > 1 ? parts[1] : parts[0]) ?? '';
+    const kanji = parts.length > 1 && parts[0] ? parts[0] : kana;
+
+    if (!kana) {
+      errors.push({ line: i + 1, text: line, reason: '読みが空です' });
+      return;
+    }
+    if (kana.length > MAX_KANA) {
+      errors.push({ line: i + 1, text: line, reason: `読みが長すぎます（${MAX_KANA}文字まで）` });
+      return;
+    }
+    if (seen.has(kana)) {
+      errors.push({ line: i + 1, text: line, reason: '同じ読みが既にあります' });
+      return;
+    }
+    try {
+      tokenize(kana);
+    } catch (e) {
+      errors.push({ line: i + 1, text: line, reason: `ローマ字にできません（${e.message}）` });
+      return;
+    }
+    seen.add(kana);
+    words.push({ kanji, kana, tag: 'mine' });
+  });
+
+  return { words, errors };
+}
+
+/** 保存済みの自作お題を読み込む。壊れていたら捨てる */
+export function loadCustom() {
+  const saved = store.load('words.v1', null);
+  custom = Array.isArray(saved)
+    ? saved.filter((w) => w && typeof w.kana === 'string' && typeof w.kanji === 'string')
+      .slice(0, MAX_CUSTOM)
+      .map((w) => ({ kanji: w.kanji, kana: w.kana, tag: 'mine' }))
+    : [];
+  source = SOURCES.some((s) => s.id === store.load('words.source', '')) 
+    ? store.load('words.source', 'builtin') 
+    : 'builtin';
+  if (!custom.length) source = 'builtin';
+  return custom;
+}
+
+export function saveCustom(words) {
+  custom = words.slice(0, MAX_CUSTOM).map((w) => ({ kanji: w.kanji, kana: w.kana, tag: 'mine' }));
+  if (!custom.length) setSource('builtin');
+  return store.save('words.v1', custom);
+}
+
+export function getCustom() {
+  return custom;
+}
+
+export function getSource() {
+  return source;
+}
+
+export function setSource(id) {
+  source = SOURCES.some((s) => s.id === id) && (id === 'builtin' || custom.length)
+    ? id
+    : 'builtin';
+  store.save('words.source', source);
+  return source;
+}
+
+/** いま出題に使うお題の全体 */
+export function activeWords() {
+  if (source === 'custom') return custom;
+  if (source === 'both') return [...WORDS, ...custom];
+  return WORDS;
+}
+
 /** tier / tag は数値・ID、または 'all' */
 export function wordsIn(tier = 'all', tag = 'all') {
-  return WORDS.filter((w) => (tier === 'all' || tierOf(w) === tier)
+  return activeWords().filter((w) => (tier === 'all' || tierOf(w) === tier)
     && (tag === 'all' || w.tag === tag));
 }
 
@@ -150,5 +261,5 @@ export function pickWord(tierPool, tag, avoid) {
     if (w.kana !== avoid) return w;
   }
   const fallback = wordsIn('all', tag);
-  return fallback.find((w) => w.kana !== avoid) ?? WORDS[0];
+  return fallback.find((w) => w.kana !== avoid) ?? fallback[0] ?? WORDS[0];
 }

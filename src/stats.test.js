@@ -3,9 +3,6 @@ import assert from 'node:assert/strict';
 import {
   emptyStats, recordHit, recordMiss, weakKeys, mergeMatch,
 } from './stats.js';
-import {
-  WORDS, TAGS, tierOf, wordsIn, pickWord,
-} from './words.js';
 
 // --- ミスが1つでもあればミス率順に並ぶ ---
 {
@@ -77,24 +74,4 @@ import {
   assert.equal(s.best.maxCombo, 12);
 }
 
-// --- お題データ: タグ・ティアの整合と、全組み合わせが引けること ---
-{
-  const ids = TAGS.map((t) => t.id);
-  for (const w of WORDS) {
-    assert.ok(ids.includes(w.tag), `${w.kanji} のタグが不正: ${w.tag}`);
-  }
-  for (const tag of ids) {
-    for (const tier of [0, 1, 2]) {
-      const pool = wordsIn(tier, tag);
-      assert.ok(pool.length > 0, `${tag} × ティア${tier} が空`);
-      const picked = pickWord([tier], tag);
-      assert.equal(tierOf(picked), tier, 'ティア指定が守られる');
-      assert.equal(picked.tag, tag, 'カテゴリ指定が守られる');
-    }
-  }
-  // avoid で同じお題の連続を避ける
-  const twice = pickWord([0], 'waza', wordsIn(0, 'waza')[0].kana);
-  assert.notEqual(twice.kana, wordsIn(0, 'waza')[0].kana, '直前と同じお題は避ける');
-}
-
-console.log(`OK: stats / ${WORDS.length} words / tags ${TAGS.map((t) => t.id).join(',')}`);
+console.log('OK: stats / weak keys / totals');

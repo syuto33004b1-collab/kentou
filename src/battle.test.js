@@ -1,8 +1,8 @@
 // node src/battle.test.js
 import assert from 'node:assert/strict';
 import {
-  COUNTER_AT, COUNTER_MUL, SPEED_MAX, SPEED_MIN,
-  wordLimitMs, isCounter, playerDamage, cpuDamage, rankOf,
+  COUNTER_AT, COUNTER_MUL, SPEED_MAX, SPEED_MIN, RAMP_FROM, RAMP_TO, PROGRESS_RELIEF,
+  wordLimitMs, isCounter, playerDamage, cpuDamage, rankOf, rampedKpm, recommendKpm,
 } from './battle.js';
 
 const dmg = (opts) => playerDamage(opts).dmg;
@@ -78,10 +78,60 @@ const dmg = (opts) => playerDamage(opts).dmg;
   assert.ok(long > short, `同じKPMなら長い方が重い (${short} -> ${long})`);
 }
 
-// --- 被弾ダメージ ---
+// --- 被弾ダメージは打てていた分だけ軽くなる ---
 {
   assert.ok(cpuDamage(20) > cpuDamage(5), '長いお題を落とすほど痛い');
-  assert.ok(cpuDamage(5) > 2, '被弾はミス（2ダメージ）より必ず重い');
+  assert.ok(cpuDamage(5) > 2, '手つかずの被弾はミス（2ダメージ）より必ず重い');
+
+  const untouched = cpuDamage(20, 0);
+  const almost = cpuDamage(20, 0.9);
+  assert.ok(almost < untouched, `あと一歩の被弾は軽い (${untouched} -> ${almost})`);
+  assert.equal(cpuDamage(20, 1), Math.max(2, Math.round((6 + 9) * (1 - PROGRESS_RELIEF))));
+  assert.ok(cpuDamage(20, 1) >= 2, '完全に打てていても0にはしない');
+  assert.equal(cpuDamage(20, 5), cpuDamage(20, 1), '進捗は1でクランプされる');
+  assert.equal(cpuDamage(20, -3), cpuDamage(20, 0), '負の進捗も潰す');
+
+  // 少し遅いだけのプレイヤーは、手つかずで落とす人の倍以上粘れる。
+  // ここが崖だと「相手のKPMをわずかに下回る」だけで一方的に溶ける
+  assert.ok(
+    cpuDamage(20, 0.9) * 2 <= cpuDamage(20, 0),
+    `あと一歩の被弾は半分以下 (${cpuDamage(20, 0.9)} vs ${cpuDamage(20, 0)})`,
+  );
+}
+
+// --- CPUのKPMは試合の進行で上がる ---
+{
+  assert.ok(rampedKpm(190, 0) < 190, '序盤は基準より遅い');
+  assert.ok(rampedKpm(190, 1) > 190, '終盤は基準より速い');
+  assert.equal(Math.round(rampedKpm(190, 0)), Math.round(190 * RAMP_FROM));
+  assert.equal(Math.round(rampedKpm(190, 1)), Math.round(190 * RAMP_TO));
+  assert.equal(rampedKpm(190, 2), rampedKpm(190, 1), '進行度はクランプされる');
+  assert.equal(rampedKpm(190, -1), rampedKpm(190, 0));
+  // 単調増加
+  let prevKpm = 0;
+  for (const p of [0, 0.2, 0.4, 0.6, 0.8, 1]) {
+    const k = rampedKpm(190, p);
+    assert.ok(k > prevKpm, '進行度に対して単調に上がる');
+    prevKpm = k;
+  }
+  // 序盤の制限時間は基準より緩い＝遅いプレイヤーも一戦が成立する
+  assert.ok(
+    wordLimitMs(10, rampedKpm(190, 0), 1100) > wordLimitMs(10, 190, 1100),
+    '序盤は制限時間が伸びる',
+  );
+}
+
+// --- 校正結果からのモード推奨 ---
+{
+  const bases = [110, 190, 290];
+  assert.equal(recommendKpm(60, bases), 110, '遅い人にも一番易しいモードを出す');
+  assert.equal(recommendKpm(130, bases), 110);
+  assert.equal(recommendKpm(210, bases), 190);
+  assert.equal(recommendKpm(400, bases), 290, '速い人には一番難しいモード');
+  // 基準ぴったりのKPMなら、そのモードが互角と判定される
+  for (const b of bases) {
+    assert.equal(recommendKpm(b * ((RAMP_FROM + RAMP_TO) / 2), bases), b, `${b} が推奨される`);
+  }
 }
 
 // --- 階級の境界 ---

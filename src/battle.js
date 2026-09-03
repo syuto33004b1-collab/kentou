@@ -11,6 +11,19 @@ export const SPEED_MAX = 2.2;
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
+// CPUのKPMは試合の進行でこの範囲を動く。固定値だと
+// 「相手のKPMを超えているか」の二値になり、互角の帯が針の穴になる
+export const RAMP_FROM = 0.82;
+export const RAMP_TO = 1.28;
+
+/**
+ * 進行度に応じたCPUの実効KPM。progress は CPU に与えたダメージの割合。
+ * 追い詰めるほど速くなるので、どの難易度でも途中で必ず互角の帯を通る。
+ */
+export function rampedKpm(baseKpm, progress) {
+  return baseKpm * (RAMP_FROM + clamp(progress, 0, 1) * (RAMP_TO - RAMP_FROM));
+}
+
 /** お題1つに与える制限時間 */
 export function wordLimitMs(keystrokes, kpm, graceMs) {
   return keystrokes * (60 / kpm) * 1000 + graceMs;
@@ -42,9 +55,30 @@ export function playerDamage({
   };
 }
 
-/** 時間切れでプレイヤーが受けるダメージ */
-export function cpuDamage(keystrokes) {
-  return Math.round(6 + keystrokes * 0.45);
+// 打ちかけの分だけ被弾を軽くする割合
+export const PROGRESS_RELIEF = 0.7;
+
+/**
+ * 時間切れでプレイヤーが受けるダメージ。
+ * progress（打てていた割合）が高いほど軽い。あと一歩で落とした被弾と
+ * 手つかずで落とした被弾を同じ重さにすると、少し遅いだけで即死する。
+ */
+export function cpuDamage(keystrokes, progress = 0) {
+  const full = 6 + keystrokes * 0.45;
+  const relief = 1 - clamp(progress, 0, 1) * PROGRESS_RELIEF;
+  return Math.max(2, Math.round(full * relief));
+}
+
+/**
+ * 実測KPMに対して、互角に戦える基準KPMを baseKpms から選ぶ。
+ * ランプで実効KPMは平均 (RAMP_FROM+RAMP_TO)/2 倍になるので、
+ * 実測値をその分割り戻してから比べる。
+ * どれにも届かないなら一番易しいものを返す（門前払いにしない）。
+ */
+export function recommendKpm(measuredKpm, baseKpms) {
+  const target = measuredKpm / ((RAMP_FROM + RAMP_TO) / 2);
+  const sorted = [...baseKpms].sort((a, b) => a - b);
+  return sorted.filter((k) => k <= target).pop() ?? sorted[0];
 }
 
 /**

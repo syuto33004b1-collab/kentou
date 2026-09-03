@@ -2,11 +2,15 @@ import {
   createTyping, press, typedText, pendingText,
 } from './romaji.js';
 import {
-  pickWord, wordsIn, TAGS, TIER_LABELS,
+  pickWord, wordsIn, parseWordList, loadCustom, saveCustom, getCustom,
+  getSource, setSource, SOURCES, TAGS, TIER_LABELS,
 } from './words.js';
 import {
-  COUNTER_AT, wordLimitMs, playerDamage, cpuDamage, rankOf,
+  COUNTER_AT, wordLimitMs, playerDamage, cpuDamage, rankOf, rampedKpm, recommendKpm,
 } from './battle.js';
+import {
+  titleHtml, pauseHtml, resultHtml, calibHtml,
+} from './screens.js';
 import * as fx from './fx.js';
 import * as sfx from './sound.js';
 import * as st from './stats.js';
@@ -20,6 +24,7 @@ const romajiEl = $('#romaji');
 const comboEl = $('#combo');
 const calloutEl = $('#callout');
 const timerFill = $('#timer-fill');
+const timerLabel = $('#timer-label');
 const overlay = $('#overlay');
 const imeWarn = $('#ime-warn');
 const trainBar = $('#train-bar');
@@ -33,7 +38,7 @@ const MODES = [
     key: '1', name: '見習い', en: 'ROOKIE', kpm: 110, grace: 1600, tiers: [0, 0, 0, 1], hint: 'ゆっくり。まず打ち切る練習',
   },
   {
-    key: '2', name: '闘士', en: 'FIGHTER', kpm: 190, grace: 1100, tiers: [0, 1, 1, 2], hint: '対戦らしい速度。まずここから', best: true,
+    key: '2', name: '闘士', en: 'FIGHTER', kpm: 190, grace: 1100, tiers: [0, 1, 1, 2], hint: '対戦らしい速度。まずここから',
   },
   {
     key: '3', name: '鬼', en: 'DEMON', kpm: 290, grace: 800, tiers: [1, 1, 2, 2], hint: '大会速度。一瞬で溶ける',
@@ -41,9 +46,18 @@ const MODES = [
   {
     key: '4', name: '修練', en: 'TRAINING', kpm: null, train: true, hint: '時間制限なし。苦手を潰す',
   },
+  {
+    key: '0', name: '診断', en: 'CALIBRATE', kpm: null, calib: true, mark: '10s', hint: '10秒で実測して、おすすめを出す',
+  },
 ];
 
+const FIGHT_MODES = MODES.filter((m) => m.kpm);
+const CALIB_MS = 10000;
+// リプレイと所要時間の記録を残す上限。長期戦でも際限なく溜めない
+const MAX_LOG = 40;
+
 const stats = st.load();
+loadCustom();
 
 const S = {
   phase: 'TITLE',
@@ -57,15 +71,23 @@ const S = {
   word: null,
   typing: null,
   wordElapsed: 0,
-  wordLimit: 1,
+  wordLimit: 0,
   wordMiss: 0,
   lastKeyAt: 0,
   resumeTo: 'FIGHT',
   train: { tag: 'all', tier: 'all' },
+  log: [],
+  rec: null,
+  calibEnd: 0,
+  calibMode: null,
+  result: null,
+  prevResult: null,
+  outcome: null,
+  replayTimers: [],
 };
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-const isPlaying = () => S.phase === 'FIGHT' || S.phase === 'TRAIN';
+const isPlaying = () => S.phase === 'FIGHT' || S.phase === 'TRAIN' || S.phase === 'CALIB';
 
 // --- 描画 ---
 
@@ -149,17 +171,45 @@ function clearPrompt() {
   romajiEl.replaceChildren();
 }
 
+/** CPUに与えたダメージの割合。追い詰めるほど相手は速くなる */
+function cpuProgress() {
+  return 1 - S.hp.c / 100;
+}
+
 // --- ゲーム進行 ---
 
 function nextWord() {
   const train = S.phase === 'TRAIN';
-  let tiers = S.mode.tiers;
+  let tiers = S.mode.tiers ?? [0, 1, 2];
   if (train) tiers = S.train.tier === 'all' ? [0, 1, 2] : [S.train.tier];
+  if (S.phase === 'CALIB') tiers = [0]; // 診断は短文だけ。読む時間の差を測りたくない
+
   S.word = pickWord(tiers, train ? S.train.tag : 'all', S.word?.kana);
   S.typing = createTyping(S.word.kana);
   S.wordElapsed = 0;
   S.wordMiss = 0;
-  S.wordLimit = S.mode.kpm ? wordLimitMs(S.typing.keystrokes, S.mode.kpm, S.mode.grace) : 0;
+
+  if (S.mode.kpm) {
+    const kpm = rampedKpm(S.mode.kpm, cpuProgress());
+    S.wordLimit = wordLimitMs(S.typing.keystrokes, kpm, S.mode.grace);
+    timerLabel.textContent = `残り時間 · CPU ${Math.round(kpm)} KPM`;
+  } else {
+    S.wordLimit = 0;
+  }
+
+  S.rec = {
+    kanji: S.word.kanji,
+    kana: S.word.kana,
+    limitMs: S.wordLimit,
+    keys: [],
+    misses: 0,
+    ms: 0,
+    outcome: null,
+    startAt: 0,
+  };
+  if (S.log.length >= MAX_LOG) S.log.shift();
+  S.log.push(S.rec);
+
   p1.classList.remove('wind');
   renderPrompt();
   bump(kanjiEl, 'enter');
@@ -185,7 +235,7 @@ function enterReady(labels, next) {
   tick();
 }
 
-function startMatch(mode) {
+function resetMatch(mode) {
   S.mode = mode;
   S.hp = { p: 100, c: 100 };
   S.combo = 0;
@@ -194,10 +244,17 @@ function startMatch(mode) {
   S.totalMiss = 0;
   S.matchStart = performance.now();
   S.word = null;
+  S.log = [];
   overlay.hidden = true;
   stage.classList.remove('ko');
   imeWarn.hidden = true;
   fx.clear();
+  stopReplay();
+}
+
+function startMatch(mode) {
+  if (mode.calib) { startCalibration(); return; }
+  resetMatch(mode);
 
   const train = !!mode.train;
   document.body.classList.toggle('mode-train', train);
@@ -241,7 +298,7 @@ function damageTo(side, amount, color) {
   bump(target, 'hurt');
 }
 
-/** 完打の演出。対戦と修練で共用する */
+/** 完打の演出。対戦・修練・診断・リプレイで共用する */
 function strike(rank, power, color) {
   const r = RANK_FX[rank];
   fx.hitstop(r.stop);
@@ -262,6 +319,12 @@ function strike(rank, power, color) {
   bump(p2, 'knockback');
 }
 
+function closeRec(outcome) {
+  if (!S.rec) return;
+  S.rec.outcome = outcome;
+  S.rec.ms = Math.round(S.wordElapsed);
+}
+
 function playerAttack() {
   const { dmg, counter, power } = playerDamage({
     keystrokes: S.typing.keystrokes,
@@ -279,12 +342,12 @@ function playerAttack() {
 
   if (counter) { callout('COUNTER!', 'counter'); sfx.counter(); } else if (rank === 'super') callout('SUPER!', 'super');
 
+  closeRec('hit');
   damageTo('c', dmg, color);
   renderCombo();
 
-  if (S.hp.c <= 0) return finishMatch('WIN');
+  if (S.hp.c <= 0) { finishMatch('WIN'); return; }
   nextWord();
-  return undefined;
 }
 
 function trainHit() {
@@ -292,13 +355,16 @@ function trainHit() {
   S.maxCombo = Math.max(S.maxCombo, S.combo);
   const n = S.typing.keystrokes;
   strike(n >= 14 ? 'heavy' : n >= 8 ? 'mid' : 'light', 0.5, fx.comboColor(S.combo));
+  closeRec('hit');
   renderCombo();
   renderTrainStats();
   nextWord();
 }
 
 function cpuAttack() {
-  const dmg = cpuDamage(S.typing.keystrokes);
+  // 打てていた分だけ被弾を軽くする。少し遅いだけで一方的に溶けないように
+  const progress = typedText(S.typing).length / Math.max(1, S.typing.keystrokes);
+  const dmg = cpuDamage(S.typing.keystrokes, progress);
   S.combo = 0;
   renderCombo();
   fx.hitstop(90);
@@ -312,17 +378,18 @@ function cpuAttack() {
   bump(p2, 'attack');
   p1.style.setProperty('--kb', '52px');
   bump(p1, 'knockback');
+  closeRec('timeout');
   damageTo('p', dmg, '#ff5c7a');
   bump(romajiEl, 'broken');
 
-  if (S.hp.p <= 0) return finishMatch('LOSE');
+  if (S.hp.p <= 0) { finishMatch('LOSE'); return; }
   nextWord();
-  return undefined;
 }
 
 function onMiss(expected) {
   S.totalMiss += 1;
   S.wordMiss += 1;
+  if (S.rec) S.rec.misses += 1;
   if (expected) st.recordMiss(stats, expected);
 
   // コンボは全断せず半減。全断はパニック連打での即死を招くうえ、
@@ -338,32 +405,50 @@ function onMiss(expected) {
     const at = fx.centerOf(romajiEl);
     fx.damageNumber(at.x, at.y - 60, 'HALF BREAK', '#ff3b5c', 30);
   }
-  if (S.phase === 'TRAIN') { renderTrainStats(); return; }
+  if (S.phase !== 'FIGHT') {
+    if (S.phase === 'TRAIN') renderTrainStats();
+    return;
+  }
   damageTo('p', 2, '#ff5c7a');
   if (S.hp.p <= 0) finishMatch('LOSE');
 }
 
-function weakKeyBlock() {
-  const weak = st.weakKeys(stats);
-  if (!weak.length) return '<p class="weak-none">苦手キーの判定には、もう少し打鍵が必要です</p>';
-  const byMiss = weak[0].miss > 0;
-  const items = weak
-    .map((r) => `<li><b>${r.ch}</b><em>${byMiss ? `${Math.round(r.rate * 100)}%` : `${r.meanMs}ms`}</em></li>`)
-    .join('');
-  return `<div class="weak"><h3>${byMiss ? 'ミスが多いキー' : '打つのが遅いキー'}</h3><ul>${items}</ul></div>`;
+// --- 結果 ---
+
+function measure() {
+  const secs = (performance.now() - S.matchStart) / 1000;
+  const total = S.totalKeys + S.totalMiss;
+  return {
+    kpm: Math.round((S.totalKeys / Math.max(secs, 1)) * 60),
+    acc: total ? Math.round((S.totalKeys / total) * 1000) / 10 : null,
+    maxCombo: S.maxCombo,
+    secs: Math.round(secs * 10) / 10,
+    keys: S.totalKeys,
+  };
 }
 
-function deltaOf(now, before) {
-  if (before == null) return '';
-  const d = Math.round((now - before) * 10) / 10;
-  if (d === 0) return '<i class="flat">±0</i>';
-  return `<i class="${d > 0 ? 'up' : 'down'}">${d > 0 ? '+' : ''}${d}</i>`;
+function renderResult() {
+  S.phase = 'ROUND_END';
+  showOverlay(resultHtml({
+    outcome: S.outcome,
+    mode: S.mode,
+    result: S.result,
+    prev: S.prevResult,
+    best: stats.best,
+    matches: stats.matches,
+    wins: stats.wins,
+    weak: st.weakKeys(stats),
+    log: S.log.filter((r) => r.outcome),
+  }));
 }
 
 function finishMatch(outcome) {
-  S.phase = 'ROUND_END';
-  const secs = (performance.now() - S.matchStart) / 1000;
+  // 結果が出るまでの間は入力を捨てる。勝った瞬間まで打っていると、
+  // 打鍵の余りが R（再戦）や V（リプレイ）として拾われてしまう
+  S.phase = 'SETTLE';
+  S.outcome = outcome;
   calloutEl.className = '';
+  if (S.rec && !S.rec.outcome) closeRec(outcome === 'WIN' ? 'hit' : 'timeout');
   stage.classList.add('ko');
   fx.hitstop(220);
   fx.flash('255,255,255', 0.35);
@@ -373,43 +458,118 @@ function finishMatch(outcome) {
   fx.burst(at.x, at.y, { count: 90, color: '#ffd23f', speed: 900, size: 4.5 });
   fx.burst(at.x, at.y, { count: 50, color: '#ff3b5c', speed: 640, size: 3.5 });
 
-  const total = S.totalKeys + S.totalMiss;
-  const result = {
-    kpm: Math.round((S.totalKeys / Math.max(secs, 1)) * 60),
-    acc: total ? Math.round((S.totalKeys / total) * 1000) / 10 : null,
-    maxCombo: S.maxCombo,
-    secs: Math.round(secs * 10) / 10,
-    keys: S.totalKeys,
-    outcome,
-  };
-  const prev = stats.last;
-  st.mergeMatch(stats, result);
+  S.result = { ...measure(), outcome };
+  S.prevResult = stats.last;
+  st.mergeMatch(stats, S.result);
   st.save(stats);
 
-  const best = stats.best
-    ? `<p class="best-line">自己ベスト　KPM <b>${stats.best.kpm}</b>　正確率 <b>${stats.best.acc}%</b>　コンボ <b>${stats.best.maxCombo}</b>　—　${stats.matches}戦 ${stats.wins}勝</p>`
-    : `<p class="best-line">${stats.matches}戦 ${stats.wins}勝</p>`;
-
   setTimeout(() => {
-    if (S.phase !== 'ROUND_END') return;
-    showOverlay(`
-      <div class="ko-title ${outcome === 'WIN' ? 'win' : 'lose'}">${outcome === 'WIN' ? 'K.O.' : 'YOU LOSE'}</div>
-      <div class="ko-sub">${outcome === 'WIN' ? '相手を沈めた' : '沈められた'}　—　${S.mode.name} / ${S.mode.en}</div>
-      <dl class="stats">
-        <div><dt>KPM</dt><dd>${result.kpm}${deltaOf(result.kpm, prev?.kpm)}</dd></div>
-        <div><dt>正確率</dt><dd>${result.acc == null ? '—' : `${result.acc}<small>%</small>${deltaOf(result.acc, prev?.acc)}`}</dd></div>
-        <div><dt>最大コンボ</dt><dd>${result.maxCombo}</dd></div>
-        <div><dt>時間</dt><dd>${result.secs}<small>s</small></dd></div>
-      </dl>
-      ${weakKeyBlock()}
-      ${best}
-      <p class="keys"><kbd>R</kbd> もう一戦　<kbd>Esc</kbd> モード選択</p>
-    `);
+    if (S.phase === 'SETTLE') renderResult();
   }, 700);
-  return undefined;
 }
 
-function titleScreen() {
+// --- 校正（10秒の実測） ---
+
+function startCalibration() {
+  resetMatch(MODES.find((m) => m.calib));
+  document.body.classList.remove('mode-train');
+  trainBar.hidden = true;
+  renderHp('p');
+  renderHp('c');
+  renderCombo();
+  S.phase = 'CALIB';
+  nextWord();
+  S.calibEnd = performance.now() + CALIB_MS;
+  S.lastKeyAt = performance.now();
+  callout('10秒 診断', 'ready');
+  sfx.round();
+}
+
+function finishCalibration() {
+  const m = measure();
+  const target = recommendKpm(m.kpm, FIGHT_MODES.map((x) => x.kpm));
+  S.calibMode = FIGHT_MODES.find((x) => x.kpm === target) ?? FIGHT_MODES[0];
+  stats.calibratedKpm = m.kpm;
+  st.save(stats);
+  S.phase = 'CALIB_END';
+  calloutEl.className = '';
+  clearPrompt();
+  sfx.bell();
+  fx.flash('255,255,255', 0.2);
+  showOverlay(calibHtml({
+    kpm: m.kpm, acc: m.acc, keys: m.keys, mode: S.calibMode,
+  }));
+}
+
+// --- リプレイ ---
+
+function stopReplay() {
+  S.replayTimers.forEach(clearTimeout);
+  S.replayTimers = [];
+  document.body.classList.remove('mode-replay');
+}
+
+function endReplay() {
+  stopReplay();
+  clearPrompt();
+  calloutEl.className = '';
+  stage.classList.add('ko');
+  renderResult();
+}
+
+function startReplay() {
+  const log = S.log.filter((r) => r.outcome && r.keys.length);
+  if (!log.length) return;
+  stopReplay();
+  S.phase = 'REPLAY';
+  overlay.hidden = true;
+  stage.classList.remove('ko');
+  fx.clear();
+  document.body.classList.add('mode-replay');
+  timerLabel.textContent = 'リプレイ · 何かキーで戻る';
+
+  let i = 0;
+  const at = (fn, ms) => S.replayTimers.push(setTimeout(fn, ms));
+
+  const playWord = () => {
+    if (S.phase !== 'REPLAY') return;
+    if (i >= log.length) {
+      at(() => { if (S.phase === 'REPLAY') endReplay(); }, 600);
+      return;
+    }
+    const rec = log[i];
+    i += 1;
+    S.word = { kanji: rec.kanji, kana: rec.kana };
+    S.typing = createTyping(rec.kana);
+    renderPrompt();
+    bump(kanjiEl, 'enter');
+
+    rec.keys.forEach((k) => at(() => {
+      if (S.phase !== 'REPLAY') return;
+      const r = press(S.typing, k.ch);
+      renderPrompt(r !== 'miss');
+      if (r === 'miss') { sfx.miss(); bump(romajiEl, 'shakeout'); return; }
+      sfx.key(0);
+      if (r === 'done') strike('mid', 0.5, '#ffd23f');
+    }, k.t));
+
+    const lastAt = rec.keys.at(-1)?.t ?? 0;
+    at(playWord, lastAt + (rec.outcome === 'timeout' ? 900 : 450));
+  };
+
+  callout('REPLAY', 'ready');
+  at(playWord, 500);
+}
+
+// --- タイトル ---
+
+function recommendedKey() {
+  if (!stats.calibratedKpm) return '2';
+  const target = recommendKpm(stats.calibratedKpm, FIGHT_MODES.map((m) => m.kpm));
+  return FIGHT_MODES.find((m) => m.kpm === target)?.key ?? '2';
+}
+
+function titleScreen({ keepText, status } = {}) {
   S.phase = 'TITLE';
   stage.classList.remove('ko');
   document.body.classList.remove('mode-train');
@@ -418,51 +578,32 @@ function titleScreen() {
   clearPrompt();
   calloutEl.className = '';
   fx.clear();
+  stopReplay();
   st.save(stats);
 
-  const rows = MODES.map((m) => `
-    <li${m.best ? ' class="pick"' : ''}>
-      <kbd>${m.key}</kbd>
-      <span><b>${m.name}</b> ${m.en}<em>${m.hint}</em></span>
-      <i>${m.kpm ? `${m.kpm}<small>KPM</small>` : '∞'}</i>
-    </li>`).join('');
+  showOverlay(titleHtml({
+    modes: MODES,
+    recommendedKey: recommendedKey(),
+    custom: getCustom(),
+    source: getSource(),
+    sources: SOURCES,
+    calibratedKpm: stats.calibratedKpm,
+  }));
 
-  showOverlay(`
-    <h1 class="logo"><span class="logo-jp">鍵闘</span><span class="logo-en">KENTOU</span></h1>
-    <p class="tagline">打ち切れ。それが一撃になる。</p>
-    <ul class="rules">
-      <li><b>打ち切る</b>＝攻撃</li>
-      <li><b>時間切れ</b>＝被弾</li>
-      <li><b>ミス</b>＝よろけ（コンボ半減）</li>
-    </ul>
-    <ul class="diff">${rows}</ul>
-    <p class="keys">数字キーかクリックで開始　—　<b>日本語入力はOFF（半角英数）に</b></p>
-    <details class="rtable">
-      <summary>ローマ字の受理ルール</summary>
-      <table>
-        <tr><th>し</th><td>shi / si / ci</td><th>つ</th><td>tsu / tu</td></tr>
-        <tr><th>ち</th><td>chi / ti</td><th>ふ</th><td>fu / hu</td></tr>
-        <tr><th>じ</th><td>ji / zi</td><th>じゃ</th><td>ja / jya / zya</td></tr>
-        <tr><th>しゅ</th><td>shu / syu</td><th>ちょ</th><td>cho / tyo / cyo</td></tr>
-        <tr><th>っ</th><td>子音重ね（sekka）/ xtu / ltu</td><th>ー</th><td>-</td></tr>
-        <tr><th>ん</th><td colspan="3">後続が子音なら <b>n</b> 単独。母音・な行・や行の前と語末は <b>nn</b> / n' / xn</td></tr>
-      </table>
-      <p>単独 <b>n</b> で「ん」を確定した直後の追加 <b>n</b> は、IMEと同じく飲み込みます。</p>
-    </details>
-    <p class="nokb">この先は物理キーボードが必要です</p>
-  `);
+  if (keepText !== undefined) {
+    const box = $('#my-input');
+    box.value = keepText;
+    box.closest('details').open = true;
+  }
+  if (status) $('#my-status').innerHTML = status;
 }
 
 function pauseGame() {
-  if (!isPlaying() && S.phase !== 'READY') return;
+  if (S.phase !== 'FIGHT' && S.phase !== 'TRAIN' && S.phase !== 'READY') return;
   S.resumeTo = S.phase === 'TRAIN' ? 'TRAIN' : 'FIGHT';
   S.phase = 'PAUSED';
   calloutEl.className = '';
-  showOverlay(`
-    <div class="ko-title pause">PAUSE</div>
-    <p class="tagline">画面から離れたので止めました</p>
-    <p class="keys">何かキーを押すと再開　—　<kbd>Esc</kbd> モード選択</p>
-  `);
+  showOverlay(pauseHtml());
 }
 
 function resumeGame() {
@@ -482,8 +623,14 @@ function resumeGame() {
 function renderTrainSelectors() {
   const tags = [{ id: 'all', label: 'ぜんぶ' }, ...TAGS];
   const tiers = [{ id: 'all', label: 'ぜんぶ' }, ...TIER_LABELS.map((label, i) => ({ id: i, label }))];
-  $('#tsel-tag').innerHTML = tags.map((t) => `<button type="button" data-tag="${t.id}" class="${S.train.tag === t.id ? 'on' : ''}">${t.label}<em>${wordsIn(S.train.tier, t.id).length}</em></button>`).join('');
-  $('#tsel-tier').innerHTML = tiers.map((t) => `<button type="button" data-tier="${t.id}" class="${S.train.tier === t.id ? 'on' : ''}">${t.label}<em>${wordsIn(t.id, S.train.tag).length}</em></button>`).join('');
+  const chip = (attr, id, label, count) => {
+    const on = (attr === 'tag' ? S.train.tag : S.train.tier) === id;
+    return `<button type="button" data-${attr}="${id}"${on ? ' class="on"' : ''}${count === 0 ? ' disabled' : ''}>${label}<em>${count}</em></button>`;
+  };
+  $('#tsel-tag').innerHTML = tags
+    .map((t) => chip('tag', t.id, t.label, wordsIn(S.train.tier, t.id).length)).join('');
+  $('#tsel-tier').innerHTML = tiers
+    .map((t) => chip('tier', t.id, t.label, wordsIn(t.id, S.train.tag).length)).join('');
 }
 
 trainBar.addEventListener('click', (e) => {
@@ -496,11 +643,53 @@ trainBar.addEventListener('click', (e) => {
   b.blur();
 });
 
+// --- 自作お題 ---
+
+function applyCustomWords() {
+  const text = $('#my-input').value;
+  const { words, errors } = parseWordList(text);
+  saveCustom(words);
+  const ok = `<b>${words.length}件</b>を保存しました`;
+  const bad = errors.length
+    ? `<span class="err">${errors.length}行は読み込めません</span><ul>${errors.slice(0, 6).map((e) => `<li>${e.line}行目: ${e.reason}</li>`).join('')}</ul>`
+    : '';
+  titleScreen({ keepText: text, status: ok + bad });
+}
+
+overlay.addEventListener('click', (e) => {
+  if (S.phase !== 'TITLE') return;
+
+  const act = e.target.closest('button[data-act]');
+  if (act) {
+    if (act.dataset.act === 'save') applyCustomWords();
+    else {
+      saveCustom([]);
+      titleScreen({ keepText: '', status: '自作のお題を消しました' });
+    }
+    return;
+  }
+
+  const src = e.target.closest('button[data-src]');
+  if (src) {
+    setSource(src.dataset.src);
+    const label = SOURCES.find((s) => s.id === getSource()).label;
+    titleScreen({ keepText: $('#my-input')?.value ?? '', status: `出題を「${label}」にしました` });
+    return;
+  }
+
+  const li = e.target.closest('.diff li');
+  if (!li) return;
+  sfx.unlock();
+  startMatch(MODES[[...li.parentElement.children].indexOf(li)]);
+});
+
 // --- 入力 ---
 
 window.addEventListener('compositionstart', () => { imeWarn.hidden = false; });
 
 window.addEventListener('keydown', (e) => {
+  // 自作お題の入力中はゲームの操作として取らない
+  if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   sfx.unlock();
   const k = e.key;
@@ -517,6 +706,13 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 
+  if (S.phase === 'CALIB_END') {
+    e.preventDefault();
+    if (k === 'Enter' || k === ' ') startMatch(S.calibMode);
+    else if (k === 'Escape') titleScreen();
+    return;
+  }
+
   if (S.phase === 'PAUSED') {
     e.preventDefault();
     if (k === 'Escape') titleScreen();
@@ -524,8 +720,12 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 
+  if (S.phase === 'SETTLE') { e.preventDefault(); return; }
+  if (S.phase === 'REPLAY') { e.preventDefault(); endReplay(); return; }
+
   if (S.phase === 'ROUND_END') {
     if (k === 'r' || k === 'R') { e.preventDefault(); startMatch(S.mode); }
+    if (k === 'v' || k === 'V') { e.preventDefault(); startReplay(); }
     if (k === 'Escape') { e.preventDefault(); titleScreen(); }
     return;
   }
@@ -538,9 +738,14 @@ window.addEventListener('keydown', (e) => {
 
   const expected = pendingText(S.typing)[0];
   const r = press(S.typing, k.toLowerCase());
+  const now = performance.now();
+  if (S.rec) {
+    if (!S.rec.startAt) S.rec.startAt = now;
+    S.rec.keys.push({ t: Math.round(now - S.rec.startAt), ch: k.toLowerCase() });
+  }
+
   if (r === 'miss') { onMiss(expected); renderPrompt(); return; }
 
-  const now = performance.now();
   st.recordHit(stats, expected, now - S.lastKeyAt);
   S.lastKeyAt = now;
   S.totalKeys += 1;
@@ -551,10 +756,16 @@ window.addEventListener('keydown', (e) => {
   // 残り1〜2文字で踏み込む。打撃感の本体は当たる前の予兆にある
   if (pendingText(S.typing).length <= 2) p1.classList.add('wind');
 
-  if (r === 'done') {
-    if (S.phase === 'TRAIN') trainHit();
-    else playerAttack();
-  } else if (S.phase === 'TRAIN') renderTrainStats();
+  if (r !== 'done') {
+    if (S.phase === 'TRAIN') renderTrainStats();
+    return;
+  }
+  if (S.phase === 'TRAIN') trainHit();
+  else if (S.phase === 'CALIB') {
+    closeRec('hit');
+    strike('light', 0.4, '#3fe0ff');
+    nextWord();
+  } else playerAttack();
 });
 
 soundBtn.addEventListener('click', () => {
@@ -562,14 +773,6 @@ soundBtn.addEventListener('click', () => {
   sfx.setEnabled(!sfx.isEnabled());
   soundBtn.textContent = sfx.isEnabled() ? '🔊 SOUND ON' : '🔇 SOUND OFF';
   soundBtn.blur();
-});
-
-overlay.addEventListener('click', (e) => {
-  if (S.phase !== 'TITLE') return;
-  const li = e.target.closest('.diff li');
-  if (!li) return;
-  sfx.unlock();
-  startMatch(MODES[[...li.parentElement.children].indexOf(li)]);
 });
 
 // 画面から離れたら止める。「戻ってきたらHPが溶けていた」をなくす
@@ -589,6 +792,15 @@ function frame(now) {
     timerFill.style.width = `${left * 100}%`;
     timerFill.classList.toggle('urgent', left <= 1 - COUNTER_AT);
     if (S.wordElapsed >= S.wordLimit) cpuAttack();
+  } else if (S.phase === 'CALIB') {
+    S.wordElapsed += dt * 1000;
+    const leftMs = Math.max(0, S.calibEnd - now);
+    timerFill.style.width = `${(leftMs / CALIB_MS) * 100}%`;
+    timerFill.classList.toggle('urgent', leftMs < 3000);
+    timerLabel.textContent = `診断 · 残り${Math.ceil(leftMs / 1000)}秒`;
+    if (leftMs <= 0) finishCalibration();
+  } else if (S.phase === 'TRAIN') {
+    S.wordElapsed += dt * 1000;
   }
 
   fx.step(dt, now);

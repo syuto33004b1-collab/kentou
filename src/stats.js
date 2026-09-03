@@ -1,13 +1,16 @@
-// 打鍵記録と苦手キー分析。localStorageに永続化するが、
-// 保存できない環境（プライベートウィンドウ等）でも遊べるように必ず例外を飲む。
+// 打鍵記録と苦手キー分析。永続化は store.js に任せる。
 
-const STORE_KEY = 'kentou.stats.v1';
+import * as store from './store.js';
+
+const STORE_KEY = 'stats.v1';
 
 // 「自己ベスト」に数える最低打鍵数。1打で100%を記録させないため
 const BEST_MIN_KEYS = 20;
 
 export function emptyStats() {
-  return { keys: {}, matches: 0, wins: 0, last: null, prev: null, best: null };
+  return {
+    keys: {}, matches: 0, wins: 0, last: null, prev: null, best: null, calibratedKpm: null,
+  };
 }
 
 function row(stats, ch) {
@@ -71,28 +74,15 @@ export function mergeMatch(stats, result) {
 }
 
 export function load() {
-  try {
-    const raw = localStorage.getItem(STORE_KEY);
-    if (!raw) return emptyStats();
-    const saved = JSON.parse(raw);
-    return { ...emptyStats(), ...saved, keys: saved.keys ?? {} };
-  } catch {
-    return emptyStats();
-  }
+  const saved = store.load(STORE_KEY, null);
+  if (!saved || typeof saved !== 'object') return emptyStats();
+  return { ...emptyStats(), ...saved, keys: saved.keys ?? {} };
 }
 
 export function save(stats) {
-  try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(stats));
-  } catch {
-    // 保存できなくてもゲームは成立する
-  }
+  return store.save(STORE_KEY, stats);
 }
 
 export function clear() {
-  try {
-    localStorage.removeItem(STORE_KEY);
-  } catch {
-    // 同上
-  }
+  store.remove(STORE_KEY);
 }
