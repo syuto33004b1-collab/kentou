@@ -28,6 +28,8 @@ const timerLabel = $('#timer-label');
 const overlay = $('#overlay');
 const imeWarn = $('#ime-warn');
 const trainBar = $('#train-bar');
+// HTMLとJSは別々にキャッシュされる（GitHub Pages は max-age=600）。
+// 古いHTML + 新しいJS の組み合わせで要素が欠けても落ちないようにする
 const startGate = $('#startgate');
 const p1 = $('#p1');
 const p2 = $('#p2');
@@ -168,11 +170,13 @@ function showOverlay(html) {
 }
 
 function showGate(main, sub) {
+  if (!startGate) return;
   startGate.innerHTML = `${main}<small>${sub}</small>`;
   startGate.hidden = false;
 }
 
 function hideGate() {
+  if (!startGate) return;
   startGate.hidden = true;
   startGate.blur();
 }
@@ -298,6 +302,8 @@ function startMatch(mode) {
  */
 function arm(to, main, sub) {
   S.gateTo = to;
+  // ゲートを出せないなら待たせない。押す手がかりが無いまま止めるより良い
+  if (!startGate) { begin(false); return; }
   S.phase = 'READY_WAIT';
   showGate(main, sub);
   callout('READY?', 'ready');
@@ -834,7 +840,7 @@ window.addEventListener('keydown', (e) => {
   } else playerAttack();
 });
 
-startGate.addEventListener('click', () => {
+startGate?.addEventListener('click', () => {
   if (S.phase !== 'READY_WAIT') return;
   sfx.unlock();
   begin(false);
