@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>鍵闘 KENTOU — 格ゲー風タイピング</title>
+<meta name="description" content="ローマ字入力で技名を打ち切り、相手を沈める格ゲー風タイピング練習サイト。">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='25' x='2' font-size='24'>鍵</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="stage">
+  <div id="bg" aria-hidden="true"></div>
+  <div id="scan" aria-hidden="true"></div>
+
+  <header id="hud">
+    <div class="side left">
+      <div class="pname">PLAYER</div>
+      <div class="hp" id="hp-p"><div class="hp-chip"></div><div class="hp-fill"></div></div>
+    </div>
+    <div class="center">
+      <div id="combo"></div>
+      <div id="timer"><div id="timer-fill"></div></div>
+      <div class="tlabel">残り時間</div>
+    </div>
+    <div class="side right">
+      <div class="pname">CPU</div>
+      <div class="hp" id="hp-c"><div class="hp-chip"></div><div class="hp-fill"></div></div>
+    </div>
+  </header>
+
+  <main id="arena" aria-hidden="true">
+    <div id="floor"></div>
+    <svg id="p1" class="fighter" viewBox="0 0 110 140"><use href="#fighter"/></svg>
+    <svg id="p2" class="fighter" viewBox="0 0 110 140"><use href="#fighter"/></svg>
+  </main>
+
+  <section id="prompt" aria-live="polite">
+    <div id="kanji"></div>
+    <div id="kana"></div>
+    <div id="romaji"></div>
+  </section>
+
+  <canvas id="fx" aria-hidden="true"></canvas>
+  <div id="overlay" hidden></div>
+  <button id="sound-toggle" type="button">🔊 SOUND ON</button>
+</div>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <!-- 右を向いた構え。前脚を踏み込み、前腕でストレートを突く -->
+  <symbol id="fighter" viewBox="0 0 120 140">
+    <!-- 後ろ脚と後ろ足 -->
+    <path d="M28 64 L48 64 L36 102 L26 130 L8 126 L16 98 Z"/>
+    <path d="M2 122 L30 127 L28 138 L0 138 Z"/>
+    <!-- 後ろ腕（引き手） -->
+    <path d="M42 44 L20 54 L14 64 L28 70 L48 56 Z"/>
+    <circle cx="17" cy="66" r="8"/>
+    <!-- 前脚と前足 -->
+    <path d="M52 64 L72 64 L84 100 L100 128 L80 138 L60 104 Z"/>
+    <path d="M76 128 L106 124 L110 138 L76 138 Z"/>
+    <!-- 胴と肩 -->
+    <path d="M34 42 L74 42 L69 78 L35 78 Z"/>
+    <path d="M33 34 L73 34 L78 50 L29 50 Z"/>
+    <!-- 頭と逆立った髪 -->
+    <circle cx="55" cy="24" r="13"/>
+    <path d="M40 20 L30 6 L45 11 L44 0 L55 10 L62 2 L64 14 Z"/>
+    <!-- 前腕（ストレート）と拳 -->
+    <path d="M64 40 L100 46 L102 59 L62 56 Z"/>
+    <circle cx="105" cy="52" r="10.5"/>
+  </symbol>
+</svg>
+
+<script type="module" src="src/game.js"></script>
+</body>
+</html>
